@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Windows
+*.exe
+*.dll
+*.obj
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.lib
+*.manifest
+*.log
+
+# Build
+/release/
+/debug/
+
+# OS
+.DS_Store
+Thumbs.db
