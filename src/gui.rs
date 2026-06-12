@@ -99,7 +99,26 @@ impl SettingsWindow {
             );
 
             if let Ok(hwnd) = hwnd {
-                center_window(hwnd.0 as isize);
+                // Restore window position from config
+                let config = crate::config::get_config();
+                if let Some(ref cfg) = config {
+                    if cfg.settings_x >= 0 && cfg.settings_y >= 0 {
+                        let _ = SetWindowPos(
+                            hwnd,
+                            None,
+                            cfg.settings_x,
+                            cfg.settings_y,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOZORDER,
+                        );
+                    } else {
+                        center_window(hwnd.0 as isize);
+                    }
+                } else {
+                    center_window(hwnd.0 as isize);
+                }
+
                 create_controls(hwnd.0 as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 *SETTINGS_HWND.lock().unwrap() = hwnd.0 as isize;
@@ -756,6 +775,17 @@ unsafe extern "system" fn settings_wnd_proc(
             LRESULT::default()
         }
         WM_NOTIFY => {
+            LRESULT::default()
+        }
+        WM_MOVE => {
+            // Save window position
+            let mut rect = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut rect);
+            if let Some(mut cfg) = crate::config::get_config() {
+                cfg.settings_x = rect.left;
+                cfg.settings_y = rect.top;
+                crate::config::update_config(&cfg);
+            }
             LRESULT::default()
         }
         WM_CLOSE => {
