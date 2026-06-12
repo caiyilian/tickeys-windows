@@ -260,6 +260,18 @@ pub fn play_audio(index: usize) {
     if MUTED.load(Ordering::Relaxed) {
         return;
     }
+
+    // Check if device is still valid, reinitialize if needed
+    unsafe {
+        if DEVICE.is_null() || CONTEXT.is_null() {
+            log::warn!("Audio device lost, reinitializing");
+            if let Err(e) = init() {
+                log::error!("Failed to reinitialize audio: {}", e);
+                return;
+            }
+        }
+    }
+
     let mut guard = PLAYER.lock().unwrap();
     if let Some(ref mut player) = *guard {
         player.play(index);
