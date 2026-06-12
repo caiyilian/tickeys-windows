@@ -266,6 +266,11 @@ pub fn shutdown_player() {
     *guard = None;
 }
 
+pub fn player_is_initialized() -> bool {
+    let guard = PLAYER.lock().unwrap();
+    guard.is_some()
+}
+
 pub fn rebuild_player(max_sources: usize) {
     let mut guard = PLAYER.lock().unwrap();
     if let Some(ref mut player) = *guard {
