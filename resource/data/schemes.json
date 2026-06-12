@@ -1,0 +1,57 @@
+[
+	{
+		"name":"bubble",
+		"display_name":"bubble",
+		"files":["1.wav","2.wav","3.wav","4.wav","5.wav","6.wav","7.wav","8.wav", "enter.wav"],
+		"non_unique_count":8,
+		"key_audio_map":{"13":8}
+	},
+	
+	{
+		"name":"typewriter",
+		"display_name":"typewriter",
+		"files":["key-new-05.wav","key-new-04.wav","key-new-03.wav","key-new-02.wav","key-new-01.wav","space-new.wav","scrollUp.wav","scrollDown.wav","backspace.wav", "return-new.wav"],
+		"non_unique_count":5,
+		"key_audio_map":{"13":9, "32":5, "8":8}
+	},
+	
+	{
+		"name": "mechanical",
+		"display_name":"mechanical",
+		"files":["1.wav", "2.wav", "3.wav", "4.wav", "5.wav"],
+		"non_unique_count":4,
+		"key_audio_map":{"13":4}
+	},
+
+	{
+		"name": "sword",
+		"display_name": "sword",
+		"files": ["1.wav", "2.wav", "3.wav", "4.wav", "5.wav", "6.wav", "back.wav", "enter.wav", "space.wav"],
+		"non_unique_count": 6,
+		"key_audio_map":{"13": 7, "32":8, "8":6}
+	},
+
+	{
+		"name": "Cherry_G80_3000",
+		"display_name": "Cherry G80-3000",
+		"files": ["G80-3000.wav",  "G80-3000_fast1.wav", "G80-3000_slow1.wav", "G80-3000_fast2.wav","G80-3000_slow2.wav"],
+		"non_unique_count": 5,
+		"key_audio_map":{"13": 4, "32": 4}
+	},
+
+	{
+		"name": "Cherry_G80_3494",
+		"display_name": "Cherry G80-3494",
+		"files": ["G80-3494.wav", "G80-3494_fast1.wav", "G80-3494_slow1.wav", "G80-3494_enter.wav", "G80-3494_space.wav", "G80-3494_backspace.wav"],
+		"non_unique_count": 3,
+		"key_audio_map":{"13": 3, "32": 4, "8": 5}
+	},
+
+	{
+		"name": "drum",
+		"display_name": "Drum",
+		"files": ["1.wav", "2.wav", "3.wav", "4.wav", "space.wav", "backspace.wav", "enter.wav"],
+		"non_unique_count": 4,
+		"key_audio_map":{"13": 6, "32": 4, "8": 5}
+	}
+]

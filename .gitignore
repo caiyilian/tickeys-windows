@@ -25,6 +25,9 @@ Cargo.lock
 /release/
 /debug/
 
+# Local test files
+/tmp/
+
 # OS
 .DS_Store
 Thumbs.db
