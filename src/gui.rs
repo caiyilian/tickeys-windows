@@ -5,6 +5,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
+static COMBOBOX_HWND: Mutex<isize> = Mutex::new(0);
 
 pub struct SettingsWindow;
 
@@ -51,6 +52,7 @@ impl SettingsWindow {
 
             if let Ok(hwnd) = hwnd {
                 center_window(hwnd.0 as isize);
+                create_controls(hwnd.0 as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 *SETTINGS_HWND.lock().unwrap() = hwnd.0 as isize;
                 log::info!("Settings window created");
@@ -96,6 +98,57 @@ fn center_window(hwnd: isize) {
     }
 }
 
+fn create_controls(hwnd: isize) {
+    unsafe {
+        let instance = GetModuleHandleW(None).unwrap();
+
+        let combo_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+            20,
+            20,
+            360,
+            200,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(1 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(combo_hwnd) = combo_hwnd {
+            *COMBOBOX_HWND.lock().unwrap() = combo_hwnd.0 as isize;
+
+            let schemes = crate::schemes::load_schemes();
+            let current_scheme = crate::config::get_config()
+                .map(|c| c.scheme)
+                .unwrap_or_default();
+
+            for (index, scheme) in schemes.iter().enumerate() {
+                let display_name: Vec<u16> = scheme.display_name.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = SendMessageW(
+                    combo_hwnd,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(display_name.as_ptr() as isize)),
+                );
+
+                        if scheme.name == current_scheme {
+                            let _ = SendMessageW(
+                                combo_hwnd,
+                                CB_SETCURSEL,
+                                Some(WPARAM(index)),
+                                Some(LPARAM(0)),
+                            );
+                        }
+            }
+
+            log::info!("ComboBox created with {} schemes", schemes.len());
+        }
+    }
+}
+
 unsafe extern "system" fn settings_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -103,12 +156,38 @@ unsafe extern "system" fn settings_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_COMMAND => {
+            let code = (wparam.0 >> 16) & 0xFFFF;
+            let id = wparam.0 & 0xFFFF;
+
+            if id == 1 && code == 0 { // CBN_SELCHANGE
+                let combo_hwnd = *COMBOBOX_HWND.lock().unwrap();
+                if combo_hwnd != 0 {
+                    let index = SendMessageW(
+                        HWND(combo_hwnd as *mut _),
+                        CB_GETCURSEL,
+                        Some(WPARAM(0)),
+                        Some(LPARAM(0)),
+                    );
+
+                    if index.0 != -1 {
+                        let schemes = crate::schemes::load_schemes();
+                        if let Some(scheme) = schemes.get(index.0 as usize) {
+                            crate::switch_scheme(&scheme.name);
+                            log::info!("Switched to scheme: {}", scheme.name);
+                        }
+                    }
+                }
+            }
+            LRESULT::default()
+        }
         WM_CLOSE => {
             let _ = ShowWindow(hwnd, SW_HIDE);
             LRESULT::default()
         }
         WM_DESTROY => {
             *SETTINGS_HWND.lock().unwrap() = 0;
+            *COMBOBOX_HWND.lock().unwrap() = 0;
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
