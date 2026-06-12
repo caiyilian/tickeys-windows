@@ -220,7 +220,7 @@ unsafe extern "system" fn wnd_proc(
             let evt = (lparam.0 as u32) & 0xFFFF;
             match evt {
                 0x0203 => { // WM_LBUTTONDBLCLK
-                    log::info!("Tray icon double-clicked");
+                    gui::SettingsWindow::new().show();
                 }
                 0x0205 => { // WM_RBUTTONUP
                     tray::show_context_menu(hwnd.0 as isize);
@@ -233,7 +233,7 @@ unsafe extern "system" fn wnd_proc(
             let cmd = (wparam.0 as u32) & 0xFFFF;
             match cmd {
                 1001 => {
-                    log::info!("Show settings");
+                    gui::SettingsWindow::new().show();
                 }
                 1002 => {
                     let muted = audio::is_muted();
