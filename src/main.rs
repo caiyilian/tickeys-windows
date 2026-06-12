@@ -250,6 +250,25 @@ unsafe extern "system" fn wnd_proc(
             gui::SettingsWindow::new().show();
             LRESULT::default()
         }
+        consts::WM_POWERBROADCAST => {
+            match wparam.0 as u32 {
+                consts::PBT_APMRESUMEAUTOMATIC | consts::PBT_APMRESUMESUSPEND => {
+                    log::info!("System resumed, reinitializing audio");
+                    audio::shutdown();
+                    if let Err(e) = audio::init() {
+                        log::error!("Failed to reinitialize audio: {}", e);
+                    }
+                    load_default_scheme();
+                    filter::check_and_apply_mute();
+                }
+                consts::PBT_APMSUSPEND => {
+                    log::info!("System suspending, cleaning up resources");
+                    audio::shutdown();
+                }
+                _ => {}
+            }
+            LRESULT::default()
+        }
         WM_DESTROY => {
             tray::remove_tray();
             filter::uninstall_foreground_hook();
