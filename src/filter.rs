@@ -31,8 +31,13 @@ pub fn get_foreground_process_name() -> Option<String> {
             return None;
         }
 
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        let process = open_process_with_fallback(pid);
         if process == 0 {
+            log::warn!("Cannot open process {} (protected system process?), unmuted", pid);
+            *CACHED_PROCESS.lock().unwrap() = Some(CachedProcess {
+                name: String::new(),
+                hwnd,
+            });
             return None;
         }
 
@@ -59,8 +64,21 @@ pub fn get_foreground_process_name() -> Option<String> {
             }
         }
 
+        log::warn!("QueryFullProcessImageNameW failed for PID {}, unmuted", pid);
+        *CACHED_PROCESS.lock().unwrap() = Some(CachedProcess {
+            name: String::new(),
+            hwnd,
+        });
         None
     }
+}
+
+unsafe fn open_process_with_fallback(pid: u32) -> isize {
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if process != 0 {
+        return process;
+    }
+    OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid)
 }
 
 pub fn invalidate_cache() {
@@ -166,4 +184,5 @@ extern "system" {
 }
 
 const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
 const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
