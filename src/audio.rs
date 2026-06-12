@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::path::PathBuf;
 use std::path::Path;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static mut DEVICE: *mut std::ffi::c_void = ptr::null_mut();
@@ -227,6 +228,20 @@ impl Drop for SimpleAudioPlayer {
 }
 
 static PLAYER: Mutex<Option<SimpleAudioPlayer>> = Mutex::new(None);
+static MUTED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_mute(muted: bool) {
+    MUTED.store(muted, Ordering::Relaxed);
+    if muted {
+        log::info!("Audio muted");
+    } else {
+        log::info!("Audio unmuted");
+    }
+}
+
+pub fn is_muted() -> bool {
+    MUTED.load(Ordering::Relaxed)
+}
 
 pub fn init_player(max_sources: usize) {
     let mut guard = PLAYER.lock().unwrap();
@@ -241,6 +256,9 @@ pub fn load_audio_data(data: Vec<AudioData>) {
 }
 
 pub fn play_audio(index: usize) {
+    if MUTED.load(Ordering::Relaxed) {
+        return;
+    }
     let mut guard = PLAYER.lock().unwrap();
     if let Some(ref mut player) = *guard {
         player.play(index);

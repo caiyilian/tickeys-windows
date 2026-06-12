@@ -206,9 +206,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT::default()
         }
         WM_FOREGROUND_CHANGE => {
-            if let Some(name) = filter::get_foreground_process_name() {
-                log::info!("Foreground switched to: {}", name);
-            }
+            filter::check_and_apply_mute();
             LRESULT::default()
         }
         WM_DESTROY => {
