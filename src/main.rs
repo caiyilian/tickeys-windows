@@ -13,7 +13,6 @@ mod logging;
 #[allow(dead_code)]
 mod power;
 mod schemes;
-#[allow(dead_code)]
 mod tray;
 
 use consts::*;
@@ -187,6 +186,8 @@ fn main() {
 
         filter::install_foreground_hook(hwnd.0 as isize);
 
+        tray::install_tray(hwnd.0 as isize, instance.0 as isize);
+
         log::info!("Tickeys Windows started");
 
         let mut msg = MSG::default();
@@ -215,7 +216,38 @@ unsafe extern "system" fn wnd_proc(
             filter::check_and_apply_mute();
             LRESULT::default()
         }
+        WM_TRAYICON => {
+            let evt = (lparam.0 as u32) & 0xFFFF;
+            match evt {
+                0x0203 => { // WM_LBUTTONDBLCLK
+                    log::info!("Tray icon double-clicked");
+                }
+                0x0205 => { // WM_RBUTTONUP
+                    tray::show_context_menu(hwnd.0 as isize);
+                }
+                _ => {}
+            }
+            LRESULT::default()
+        }
+        WM_COMMAND => {
+            let cmd = (wparam.0 as u32) & 0xFFFF;
+            match cmd {
+                1001 => {
+                    log::info!("Show settings");
+                }
+                1002 => {
+                    let muted = audio::is_muted();
+                    audio::set_mute(!muted);
+                }
+                1003 => {
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT::default()
+        }
         WM_DESTROY => {
+            tray::remove_tray();
             filter::uninstall_foreground_hook();
             keyboard::uninstall();
             audio::shutdown();
