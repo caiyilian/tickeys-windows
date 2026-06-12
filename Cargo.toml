@@ -18,7 +18,7 @@ windows = { version = "0.61", features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-openal-sys = "1"
+hound = "3.5"
 log = "0.4"
 env_logger = "0.11"
 
