@@ -67,6 +67,8 @@ impl SettingsWindow {
             let hwnd = *SETTINGS_HWND.lock().unwrap();
             if hwnd != 0 {
                 let _ = ShowWindow(HWND(hwnd as *mut _), SW_SHOW);
+                // Use keybd_event trick to allow SetForegroundWindow
+                keybd_event(0x12, 0, 0x0002, 0); // Alt up
                 let _ = SetForegroundWindow(HWND(hwnd as *mut _));
                 return;
             }
@@ -777,4 +779,9 @@ unsafe extern "system" fn settings_wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn keybd_event(bVk: u8, bScan: u8, dwFlags: u32, dwExtraInfo: usize);
 }
