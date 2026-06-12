@@ -16,6 +16,7 @@ static VOLUME_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_LABEL_HWND: Mutex<isize> = Mutex::new(0);
+static MAX_SOURCES_COMBO_HWND: Mutex<isize> = Mutex::new(0);
 
 pub struct SettingsWindow;
 
@@ -301,6 +302,71 @@ fn create_controls(hwnd: isize) {
 
             log::info!("Pitch slider created with {:.1}", current_pitch);
         }
+
+        // Max sources label
+        let max_sources_label_text = "\u{540C}\u{65F6}\u{64AD}\u{653E}\u{6570}(\u{8D8A}\u{5927}\u{8D8A}\u{4E0D}\u{5BB9}\u{6613}\u{622A}\u{65AD})";
+        let max_sources_label_utf16: Vec<u16> = max_sources_label_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let _max_sources_label_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(max_sources_label_utf16.as_ptr()),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            140,
+            100,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(6 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        // Max sources ComboBox
+        let max_sources_combo_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+            120,
+            140,
+            260,
+            200,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(7 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(max_sources_combo_hwnd) = max_sources_combo_hwnd {
+            *MAX_SOURCES_COMBO_HWND.lock().unwrap() = max_sources_combo_hwnd.0 as isize;
+
+            let current_max_sources = crate::config::get_config()
+                .map(|c| c.max_sources)
+                .unwrap_or(2);
+
+            for i in 1..=6 {
+                let option_text = format!("{}", i);
+                let option_utf16: Vec<u16> = option_text.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = SendMessageW(
+                    max_sources_combo_hwnd,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(option_utf16.as_ptr() as isize)),
+                );
+
+                if i == current_max_sources {
+                    let _ = SendMessageW(
+                        max_sources_combo_hwnd,
+                        CB_SETCURSEL,
+                        Some(WPARAM((i - 1) as usize)),
+                        Some(LPARAM(0)),
+                    );
+                }
+            }
+
+            log::info!("Max sources ComboBox created with current value {}", current_max_sources);
+        }
     }
 }
 
@@ -315,7 +381,7 @@ unsafe extern "system" fn settings_wnd_proc(
             let code = (wparam.0 >> 16) & 0xFFFF;
             let id = wparam.0 & 0xFFFF;
 
-            if id == 1 && code == 0 { // CBN_SELCHANGE
+            if id == 1 && code == 0 { // CBN_SELCHANGE for scheme selector
                 let combo_hwnd = *COMBOBOX_HWND.lock().unwrap();
                 if combo_hwnd != 0 {
                     let index = SendMessageW(
@@ -331,6 +397,28 @@ unsafe extern "system" fn settings_wnd_proc(
                             crate::switch_scheme(&scheme.name);
                             log::info!("Switched to scheme: {}", scheme.name);
                         }
+                    }
+                }
+            } else if id == 7 && code == 0 { // CBN_SELCHANGE for max sources
+                let max_sources_combo = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
+                if max_sources_combo != 0 {
+                    let index = SendMessageW(
+                        HWND(max_sources_combo as *mut _),
+                        CB_GETCURSEL,
+                        Some(WPARAM(0)),
+                        Some(LPARAM(0)),
+                    );
+
+                    if index.0 != -1 {
+                        let new_max_sources = (index.0 + 1) as usize;
+                        crate::audio::rebuild_player(new_max_sources);
+
+                        if let Some(mut cfg) = crate::config::get_config() {
+                            cfg.max_sources = new_max_sources;
+                            crate::config::update_config(&cfg);
+                        }
+
+                        log::info!("Max sources changed to {}", new_max_sources);
                     }
                 }
             }
@@ -409,6 +497,7 @@ unsafe extern "system" fn settings_wnd_proc(
             *VOLUME_LABEL_HWND.lock().unwrap() = 0;
             *PITCH_SLIDER_HWND.lock().unwrap() = 0;
             *PITCH_LABEL_HWND.lock().unwrap() = 0;
+            *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
