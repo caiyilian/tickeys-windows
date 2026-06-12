@@ -1,5 +1,6 @@
 #![allow(non_snake_case, static_mut_refs)]
-use crate::consts::WM_KEYDOWN_HOOK;
+use crate::consts::{WM_KEYDOWN_HOOK, WM_SHOW_SETTINGS, OPEN_SETTINGS_KEY_SEQ};
+use std::collections::VecDeque;
 use std::time::SystemTime;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -9,6 +10,8 @@ static mut MAIN_HWND: Option<HWND> = None;
 
 static mut LAST_KEY: i16 = -1;
 static mut LAST_TIME: u64 = 0;
+
+static mut KEY_HISTORY: Option<VecDeque<u32>> = None;
 
 #[repr(C)]
 struct KBDLLHOOKSTRUCT {
@@ -68,6 +71,25 @@ unsafe extern "system" fn low_level_keyboard_proc(
             let vk_code = kb.vkCode as u16;
 
             if !is_too_frequent(vk_code) {
+                // Add to key history
+                if KEY_HISTORY.is_none() {
+                    KEY_HISTORY = Some(VecDeque::with_capacity(20));
+                }
+                if let Some(ref mut history) = KEY_HISTORY {
+                    history.push_back(vk_code as u32);
+                    if history.len() > 20 {
+                        history.pop_front();
+                    }
+                }
+
+                // Check for settings key sequence
+                if check_settings_shortcut() {
+                    // Send message to show settings window
+                    if let Some(hwnd) = MAIN_HWND {
+                        let _ = PostMessageW(Some(hwnd), WM_SHOW_SETTINGS, WPARAM(0), LPARAM(0));
+                    }
+                }
+
                 if let Some(hwnd) = MAIN_HWND {
                     let _ = PostMessageW(Some(hwnd), WM_KEYDOWN_HOOK, WPARAM(vk_code as usize), LPARAM::default());
                 }
@@ -88,6 +110,23 @@ fn is_too_frequent(keycode: u16) -> bool {
         }
         LAST_KEY = keycode as i16;
         LAST_TIME = now;
+        false
+    }
+}
+
+fn check_settings_shortcut() -> bool {
+    unsafe {
+        if let Some(ref history) = KEY_HISTORY {
+            for seq in OPEN_SETTINGS_KEY_SEQ {
+                if history.len() >= seq.len() {
+                    let tail: Vec<u32> = history.iter().rev().take(seq.len()).cloned().collect();
+                    let seq_reversed: Vec<u32> = seq.iter().rev().cloned().collect();
+                    if tail == seq_reversed {
+                        return true;
+                    }
+                }
+            }
+        }
         false
     }
 }
