@@ -29,6 +29,9 @@ pub const PBT_APMRESUMEAUTOMATIC: u32 = 0x0012;
 pub const PBT_APMRESUMESUSPEND: u32 = 0x0007;
 pub const PBT_APMSUSPEND: u32 = 0x0004;
 
+// --- DPI awareness constants ---
+pub const PROCESS_PER_MONITOR_DPI_AWARE: u32 = 2;
+
 // --- Shortcut key sequences ---
 // QAZ123 (macOS: [12,0,6,18,19,20]) mapped to Windows VK codes
 pub const OPEN_SETTINGS_KEY_SEQ: &[&[u32]] = &[
