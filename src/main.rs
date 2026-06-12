@@ -246,6 +246,10 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT::default()
         }
+        WM_SHOW_SETTINGS => {
+            gui::SettingsWindow::new().show();
+            LRESULT::default()
+        }
         WM_DESTROY => {
             tray::remove_tray();
             filter::uninstall_foreground_hook();
