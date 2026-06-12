@@ -19,7 +19,6 @@ mod tray;
 
 use consts::*;
 use std::collections::BTreeMap;
-use std::path::Path;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -36,7 +35,7 @@ fn load_default_scheme() {
     }
 
     let scheme = &schemes[0];
-    let scheme_dir = Path::new("resource/data").join(&scheme.name);
+    let scheme_dir = audio::get_resource_path(&scheme.name);
 
     let mut audio_data = Vec::with_capacity(scheme.files.len());
     for f in &scheme.files {

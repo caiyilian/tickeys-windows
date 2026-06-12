@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct AudioScheme {
@@ -12,7 +11,7 @@ pub struct AudioScheme {
 }
 
 pub fn load_schemes() -> Vec<AudioScheme> {
-    let schemes_path = Path::new("resource/data/schemes.json");
+    let schemes_path = crate::audio::get_resource_path("schemes.json");
     if !schemes_path.exists() {
         log::warn!("schemes.json not found at {:?}", schemes_path);
         return Vec::new();
