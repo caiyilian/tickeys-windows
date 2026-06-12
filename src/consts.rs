@@ -23,6 +23,12 @@ pub const WM_KEYDOWN_HOOK: u32 = 0x0402;  // WM_USER + 2
 pub const WM_FOREGROUND_CHANGE: u32 = 0x0403;  // WM_USER + 3
 pub const WM_SHOW_SETTINGS: u32 = 0x0410;  // WM_USER + 10 (for shortcut key)
 
+// --- Power event constants ---
+pub const WM_POWERBROADCAST: u32 = 0x0218;
+pub const PBT_APMRESUMEAUTOMATIC: u32 = 0x0012;
+pub const PBT_APMRESUMESUSPEND: u32 = 0x0007;
+pub const PBT_APMSUSPEND: u32 = 0x0004;
+
 // --- Shortcut key sequences ---
 // QAZ123 (macOS: [12,0,6,18,19,20]) mapped to Windows VK codes
 pub const OPEN_SETTINGS_KEY_SEQ: &[&[u32]] = &[
