@@ -12,6 +12,8 @@ pub struct Config {
     pub filter_mode: FilterMode,
     pub auto_start: bool,
     pub blocked_keys: Vec<u16>,
+    pub settings_x: i32,
+    pub settings_y: i32,
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq)]
@@ -102,6 +104,8 @@ impl Default for Config {
             filter_mode: FilterMode::BlackList,
             auto_start: false,
             blocked_keys: Vec::new(),
+            settings_x: -1,
+            settings_y: -1,
         }
     }
 }
