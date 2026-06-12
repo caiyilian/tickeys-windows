@@ -26,17 +26,19 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 static mut KEYMAP: Option<BTreeMap<u8, u8>> = None;
 static mut FIRST_N_NON_UNIQUE: i16 = -1;
+static mut CURRENT_VOLUME: f32 = 1.0;
+static mut CURRENT_PITCH: f32 = 1.0;
 
-fn load_default_scheme() {
-    let schemes = schemes::load_schemes();
-    if schemes.is_empty() {
-        log::warn!("No schemes loaded, audio playback disabled");
-        return;
-    }
+fn switch_scheme(name: &str) {
+    let scheme = match schemes::find_scheme(name) {
+        Some(s) => s,
+        None => {
+            log::error!("Scheme '{}' not found", name);
+            return;
+        }
+    };
 
-    let scheme = &schemes[0];
     let scheme_dir = audio::get_resource_path(&scheme.name);
-
     let mut audio_data = Vec::with_capacity(scheme.files.len());
     for f in &scheme.files {
         let path = scheme_dir.join(f);
@@ -56,12 +58,30 @@ fn load_default_scheme() {
         FIRST_N_NON_UNIQUE = scheme.non_unique_count as i16;
     }
 
-    audio::init_player(audio_data.len().max(4));
-    audio::load_audio_data(audio_data);
-    audio::set_volume(1.0);
-    audio::set_pitch(1.0);
+    let player_exists = audio::player_is_initialized();
+    if player_exists {
+        audio::rebuild_player(audio_data.len().max(4));
+        audio::load_audio_data(audio_data);
+    } else {
+        audio::init_player(audio_data.len().max(4));
+        audio::load_audio_data(audio_data);
+    }
 
-    log::info!("Loaded scheme: {} ({} sounds)", scheme.display_name, scheme.files.len());
+    unsafe {
+        audio::set_volume(CURRENT_VOLUME);
+        audio::set_pitch(CURRENT_PITCH);
+    }
+
+    log::info!("Switched to scheme: {} ({} sounds)", scheme.display_name, scheme.files.len());
+}
+
+fn load_default_scheme() {
+    schemes::load_schemes();
+    if let Some(name) = schemes::first_scheme_name() {
+        switch_scheme(&name);
+    } else {
+        log::warn!("No schemes loaded, audio playback disabled");
+    }
 }
 
 fn map_key_to_audio(vk_code: u16) -> Option<usize> {
