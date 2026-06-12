@@ -206,18 +206,22 @@ impl SimpleAudioPlayer {
     }
 
     pub fn rebuild(&mut self, max_source_count: usize) {
-        if max_source_count == 0 || max_source_count == self._max_source_count {
+        if max_source_count == 0 {
             return;
         }
-        let current_data = std::mem::take(&mut self.data);
-        let mut sources = VecDeque::with_capacity(max_source_count);
-        for _ in 0..max_source_count {
-            sources.push_back(AudioSource::new().unwrap());
+        if max_source_count != self._max_source_count {
+            let mut sources = VecDeque::with_capacity(max_source_count);
+            for _ in 0..max_source_count {
+                sources.push_back(AudioSource::new().unwrap());
+            }
+            // Disconnect old sources
+            for s in self.source_cache.iter_mut() {
+                s.disconnect_from_buffer();
+            }
+            self.source_cache = sources;
+            self._max_source_count = max_source_count;
+            log::info!("Player rebuilt with {max_source_count} sources");
         }
-        self.source_cache = sources;
-        self._max_source_count = max_source_count;
-        self.load_data(current_data);
-        log::info!("Player rebuilt with {max_source_count} sources");
     }
 }
 

@@ -594,105 +594,23 @@ pub enum FilterMode {
 
 ---
 
-## 阶段十二：版本更新检查
-
-> **目标**：启动时异步检查新版本
-
-### 任务 12.1 — HTTP 请求
-
-- 使用 `reqwest` 发送异步 GET 请求
-- URL：`http://www.yingdev.com/projects/latestVersion?product=Tickeys_0.4.0&lang=en-US`
-- 启动后延迟 30 秒执行（避免影响启动速度）
-
-### 任务 12.2 — 版本解析
-
-```rust
-#[derive(Deserialize)]
-struct VersionInfo {
-    Version: String,
-    WhatsNew: String,
-}
-```
-
-- 比较远程版本与 `CURRENT_VERSION`
-- 版本不同时弹窗通知
-
-### 任务 12.3 — 更新通知
-
-- 使用 `MessageBoxW` 弹窗显示新版本信息
-- 用户点击"确定"后打开浏览器访问下载页面
-- 使用 `ShellExecuteW(None, "open", url, ...)` 打开浏览器
-
-### 里程碑 12
-
-```
-启动 30 秒后检查更新，有新版本时弹窗提示
-```
-
----
-
-## 阶段十三：日志系统
-
-> **目标**：便于调试和用户反馈
-
-### 任务 13.1 — 文件日志
-
-- 使用 `log` crate + `fern` 或 `simplelog`
-- 日志文件路径：`%APPDATA%/Tickeys/log.txt`
-- 格式：`[时间] [级别] 消息`
-- 每次启动时清空旧日志（或轮转保留最近 3 个）
-
-### 任务 13.2 — 开发/发布模式
-
-- 开发模式：同时输出到控制台和文件
-- 发布模式：仅输出到文件
-- 通过 `#[cfg(debug_assertions)]` 切换
-
-### 里程碑 13
-
-```
-日志文件正常写入，包含关键操作记录
-```
-
----
-
-## 阶段十四：发布准备与打包
+## 阶段十二：发布准备与打包（简化版）
 
 > **目标**：打包为可分发版本
 
-### 任务 14.1 — 应用图标
-
-- 使用 `winres` 在 `build.rs` 中嵌入 `.ico` 图标
-- 设置版本信息（`FILEVERSION`、`PRODUCTVERSION`）
-- 设置公司名、产品名等
-
-### 任务 14.2 — 清单文件
+### 任务 12.1 — 清单文件
 
 - 创建 `app.manifest`：
   - DPI 感知：`<dpiAwareness>PerMonitorV2</dpiAwareness>`
   - UAC 兼容：`<requestedExecutionLevel level="asInvoker" />`
   - Windows 版本兼容：`<supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>`
 
-### 任务 14.3 — 单文件发布
+### 任务 12.2 — 单文件发布
 
 - 将 exe、`openal32.dll`、`data/` 目录、`icon.ico` 打包为 zip
 - 或使用 `cargo install --path .` 安装到用户目录
 
-### 任务 14.4 — 自启动注册
-
-- 提供自启动开关（GUI 中的 CheckBox）
-- 注册表路径：`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-- 键名：`"Tickeys"`
-- 值：exe 完整路径
-
-### 任务 14.5 — 安装包（可选）
-
-- 使用 NSIS 或 WiX 制作安装程序
-- 包含：exe、openal32.dll、data/ 目录
-- 安装时自动注册自启动（可选）
-- 卸载时清理注册表和配置文件
-
-### 里程碑 14
+### 里程碑 12
 
 ```
 发布第一个可用版本 (.exe 可分发)
@@ -804,7 +722,7 @@ Windows API 调用：保持原命名风格（PascalCase）
 阶段一 (骨架) → 阶段二 (常量) → 阶段三 (键盘) → 阶段四 (音频)
 → 阶段五 (方案) → 阶段六 (配置) → 阶段八 (托盘) → 阶段九 (GUI)
 → 阶段七 (黑白名单) → 阶段十 (快捷键) → 阶段十一 (电源)
-→ 阶段十二 (更新) → 阶段十三 (日志) → 阶段十四 (打包)
+→ 阶段十二 (打包)
 ```
 
 推荐将 **系统托盘 (阶段八)** 提前到 **GUI (阶段九)** 之前，因为 GUI 需要通过托盘呼出。
