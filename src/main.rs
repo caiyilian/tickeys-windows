@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 static mut KEYMAP: Option<BTreeMap<u8, u8>> = None;
 static mut FIRST_N_NON_UNIQUE: i16 = -1;
 
-fn switch_scheme(name: &str) {
+pub fn switch_scheme(name: &str) {
     let scheme = match schemes::find_scheme(name) {
         Some(s) => s,
         None => {
