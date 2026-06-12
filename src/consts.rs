@@ -20,6 +20,7 @@ pub const VK_BACK: u32 = 0x08;
 // --- Custom window messages ---
 pub const WM_TRAYICON: u32 = 0x0401;   // WM_USER + 1
 pub const WM_KEYDOWN_HOOK: u32 = 0x0402;  // WM_USER + 2
+pub const WM_FOREGROUND_CHANGE: u32 = 0x0403;  // WM_USER + 3
 
 // --- Shortcut key sequences ---
 // QAZ123 (macOS: [12,0,6,18,19,20]) mapped to Windows VK codes
