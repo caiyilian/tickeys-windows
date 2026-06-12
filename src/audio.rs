@@ -232,6 +232,7 @@ static MUTED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_mute(muted: bool) {
     MUTED.store(muted, Ordering::Relaxed);
+    crate::tray::set_tray_icon_muted(muted);
     if muted {
         log::info!("Audio muted");
     } else {
