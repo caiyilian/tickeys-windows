@@ -14,6 +14,8 @@ static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
 static COMBOBOX_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_LABEL_HWND: Mutex<isize> = Mutex::new(0);
+static PITCH_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
+static PITCH_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 
 pub struct SettingsWindow;
 
@@ -235,6 +237,70 @@ fn create_controls(hwnd: isize) {
 
             log::info!("Volume slider created with {}%", percentage);
         }
+
+        // Pitch label
+        let current_pitch = crate::config::get_config()
+            .map(|c| c.pitch)
+            .unwrap_or(1.0);
+        let initial_pitch_display = format!("\u{97F3}\u{8C03}: {:.1}", current_pitch);
+        let initial_pitch_text_utf16: Vec<u16> = initial_pitch_display.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let pitch_label_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(initial_pitch_text_utf16.as_ptr()),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            100,
+            100,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(4 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(pitch_label_hwnd) = pitch_label_hwnd {
+            *PITCH_LABEL_HWND.lock().unwrap() = pitch_label_hwnd.0 as isize;
+        }
+
+        // Pitch Trackbar
+        let pitch_slider_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("msctls_trackbar32"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(TBS_HORZ | TBS_AUTOTICKS),
+            120,
+            100,
+            260,
+            30,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(5 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(pitch_slider_hwnd) = pitch_slider_hwnd {
+            *PITCH_SLIDER_HWND.lock().unwrap() = pitch_slider_hwnd.0 as isize;
+
+            let slider_pos = (current_pitch * 100.0) as isize;
+
+            let _ = SendMessageW(
+                pitch_slider_hwnd,
+                TBM_SETRANGE,
+                Some(WPARAM(1)),
+                Some(LPARAM(((50 << 16) | 200) as isize)),
+            );
+
+            let _ = SendMessageW(
+                pitch_slider_hwnd,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(slider_pos)),
+            );
+
+            log::info!("Pitch slider created with {:.1}", current_pitch);
+        }
     }
 }
 
@@ -271,10 +337,12 @@ unsafe extern "system" fn settings_wnd_proc(
             LRESULT::default()
         }
         WM_HSCROLL => {
-            let slider_hwnd = *VOLUME_SLIDER_HWND.lock().unwrap();
-            if slider_hwnd != 0 && lparam.0 as isize == slider_hwnd {
+            let volume_slider = *VOLUME_SLIDER_HWND.lock().unwrap();
+            let pitch_slider = *PITCH_SLIDER_HWND.lock().unwrap();
+            
+            if volume_slider != 0 && lparam.0 as isize == volume_slider {
                 let pos = SendMessageW(
-                    HWND(slider_hwnd as *mut _),
+                    HWND(volume_slider as *mut _),
                     TBM_GETPOS,
                     Some(WPARAM(0)),
                     Some(LPARAM(0)),
@@ -300,6 +368,33 @@ unsafe extern "system" fn settings_wnd_proc(
                 }
 
                 log::info!("Volume changed to {}%", percentage);
+            } else if pitch_slider != 0 && lparam.0 as isize == pitch_slider {
+                let pos = SendMessageW(
+                    HWND(pitch_slider as *mut _),
+                    TBM_GETPOS,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(0)),
+                );
+
+                let pitch = pos.0 as f32 / 100.0;
+                crate::audio::set_pitch(pitch);
+
+                if let Some(mut cfg) = crate::config::get_config() {
+                    cfg.pitch = pitch;
+                    crate::config::update_config(&cfg);
+                }
+
+                let label_text = format!("\u{97F3}\u{8C03}: {:.1}", pitch);
+                let label_hwnd = *PITCH_LABEL_HWND.lock().unwrap();
+                if label_hwnd != 0 {
+                    let label_text_utf16: Vec<u16> = label_text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = SetWindowTextW(
+                        HWND(label_hwnd as *mut _),
+                        PCWSTR(label_text_utf16.as_ptr()),
+                    );
+                }
+
+                log::info!("Pitch changed to {:.1}", pitch);
             }
             LRESULT::default()
         }
@@ -312,6 +407,8 @@ unsafe extern "system" fn settings_wnd_proc(
             *COMBOBOX_HWND.lock().unwrap() = 0;
             *VOLUME_SLIDER_HWND.lock().unwrap() = 0;
             *VOLUME_LABEL_HWND.lock().unwrap() = 0;
+            *PITCH_SLIDER_HWND.lock().unwrap() = 0;
+            *PITCH_LABEL_HWND.lock().unwrap() = 0;
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
