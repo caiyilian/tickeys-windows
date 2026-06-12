@@ -179,6 +179,8 @@ fn main() {
             log::error!("{e}");
         }
 
+        filter::install_foreground_hook(hwnd.0 as isize);
+
         log::info!("Tickeys Windows started");
 
         let mut msg = MSG::default();
@@ -203,7 +205,14 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT::default()
         }
+        WM_FOREGROUND_CHANGE => {
+            if let Some(name) = filter::get_foreground_process_name() {
+                log::info!("Foreground switched to: {}", name);
+            }
+            LRESULT::default()
+        }
         WM_DESTROY => {
+            filter::uninstall_foreground_hook();
             keyboard::uninstall();
             audio::shutdown();
             PostQuitMessage(0);
