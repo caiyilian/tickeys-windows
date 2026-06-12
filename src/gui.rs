@@ -4,8 +4,16 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+const TBS_HORZ: u32 = 0;
+const TBS_AUTOTICKS: u32 = 0x0008;
+const TBM_SETRANGE: u32 = 0x0406;
+const TBM_SETPOS: u32 = 0x0407;
+const TBM_GETPOS: u32 = 0x0400;
+
 static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
 static COMBOBOX_HWND: Mutex<isize> = Mutex::new(0);
+static VOLUME_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
+static VOLUME_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 
 pub struct SettingsWindow;
 
@@ -102,6 +110,7 @@ fn create_controls(hwnd: isize) {
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
 
+        // Scheme selector ComboBox
         let combo_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("COMBOBOX"),
@@ -134,17 +143,97 @@ fn create_controls(hwnd: isize) {
                     Some(LPARAM(display_name.as_ptr() as isize)),
                 );
 
-                        if scheme.name == current_scheme {
-                            let _ = SendMessageW(
-                                combo_hwnd,
-                                CB_SETCURSEL,
-                                Some(WPARAM(index)),
-                                Some(LPARAM(0)),
-                            );
-                        }
+                if scheme.name == current_scheme {
+                    let _ = SendMessageW(
+                        combo_hwnd,
+                        CB_SETCURSEL,
+                        Some(WPARAM(index)),
+                        Some(LPARAM(0)),
+                    );
+                }
             }
 
             log::info!("ComboBox created with {} schemes", schemes.len());
+        }
+
+        // Volume label
+        let current_volume = crate::config::get_config()
+            .map(|c| c.volume)
+            .unwrap_or(0.5);
+        let initial_percentage = (current_volume * 100.0) as i32;
+        let initial_label_text = format!("\u{97F3}\u{91CF}: {}%", initial_percentage);
+        let initial_label_text_utf16: Vec<u16> = initial_label_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let volume_label_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(initial_label_text_utf16.as_ptr()),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            60,
+            100,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(2 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(volume_label_hwnd) = volume_label_hwnd {
+            *VOLUME_LABEL_HWND.lock().unwrap() = volume_label_hwnd.0 as isize;
+        }
+
+        // Volume Trackbar
+        let volume_slider_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("msctls_trackbar32"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(TBS_HORZ | TBS_AUTOTICKS),
+            120,
+            60,
+            260,
+            30,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(3 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(volume_slider_hwnd) = volume_slider_hwnd {
+            *VOLUME_SLIDER_HWND.lock().unwrap() = volume_slider_hwnd.0 as isize;
+
+            let current_volume = crate::config::get_config()
+                .map(|c| c.volume)
+                .unwrap_or(0.5);
+
+            let slider_pos = (current_volume * 100.0) as isize;
+
+            let _ = SendMessageW(
+                volume_slider_hwnd,
+                TBM_SETRANGE,
+                Some(WPARAM(1)),
+                Some(LPARAM(((0 << 16) | 500) as isize)),
+            );
+
+            let _ = SendMessageW(
+                volume_slider_hwnd,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(slider_pos)),
+            );
+
+            let percentage = (current_volume * 100.0) as i32;
+            let label_text = format!("\u{97F3}\u{91CF}: {}%", percentage);
+            let label_hwnd = *VOLUME_LABEL_HWND.lock().unwrap();
+            if label_hwnd != 0 {
+                let label_text_utf16: Vec<u16> = label_text.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = SetWindowTextW(
+                    HWND(label_hwnd as *mut _),
+                    PCWSTR(label_text_utf16.as_ptr()),
+                );
+            }
+
+            log::info!("Volume slider created with {}%", percentage);
         }
     }
 }
@@ -181,6 +270,39 @@ unsafe extern "system" fn settings_wnd_proc(
             }
             LRESULT::default()
         }
+        WM_HSCROLL => {
+            let slider_hwnd = *VOLUME_SLIDER_HWND.lock().unwrap();
+            if slider_hwnd != 0 && lparam.0 as isize == slider_hwnd {
+                let pos = SendMessageW(
+                    HWND(slider_hwnd as *mut _),
+                    TBM_GETPOS,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(0)),
+                );
+
+                let volume = pos.0 as f32 / 100.0;
+                crate::audio::set_volume(volume);
+
+                if let Some(mut cfg) = crate::config::get_config() {
+                    cfg.volume = volume;
+                    crate::config::update_config(&cfg);
+                }
+
+                let percentage = (volume * 100.0) as i32;
+                let label_text = format!("\u{97F3}\u{91CF}: {}%", percentage);
+                let label_hwnd = *VOLUME_LABEL_HWND.lock().unwrap();
+                if label_hwnd != 0 {
+                    let label_text_utf16: Vec<u16> = label_text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = SetWindowTextW(
+                        HWND(label_hwnd as *mut _),
+                        PCWSTR(label_text_utf16.as_ptr()),
+                    );
+                }
+
+                log::info!("Volume changed to {}%", percentage);
+            }
+            LRESULT::default()
+        }
         WM_CLOSE => {
             let _ = ShowWindow(hwnd, SW_HIDE);
             LRESULT::default()
@@ -188,6 +310,8 @@ unsafe extern "system" fn settings_wnd_proc(
         WM_DESTROY => {
             *SETTINGS_HWND.lock().unwrap() = 0;
             *COMBOBOX_HWND.lock().unwrap() = 0;
+            *VOLUME_SLIDER_HWND.lock().unwrap() = 0;
+            *VOLUME_LABEL_HWND.lock().unwrap() = 0;
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
