@@ -406,6 +406,13 @@ pub enum FilterMode {
 - 某些系统进程（如 `csrss.exe`、`winlogon.exe`）可能无法获取路径
 - 对获取失败的进程，默认不静音（放行）
 
+### 任务 7.5 — 按键黑名单
+
+- `config.json` 新增 `blocked_keys: Vec<u16>` 字段
+- 在 `map_key_to_audio()` 中检查：vk_code 在 blocked_keys 内 → 直接返回 None
+- 可用于屏蔽特定按键（如音量键、功能键等）触发的音效
+- 默认值为空列表
+
 ### 里程碑 7
 
 ```
