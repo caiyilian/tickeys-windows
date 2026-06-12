@@ -11,6 +11,7 @@ pub struct Config {
     pub filter_list: Vec<String>,
     pub filter_mode: FilterMode,
     pub auto_start: bool,
+    pub blocked_keys: Vec<u16>,
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq)]
@@ -84,6 +85,9 @@ impl Config {
 
         self.filter_list.sort();
         self.filter_list.dedup();
+
+        self.blocked_keys.sort();
+        self.blocked_keys.dedup();
     }
 }
 
@@ -97,6 +101,7 @@ impl Default for Config {
             filter_list: Vec::new(),
             filter_mode: FilterMode::BlackList,
             auto_start: false,
+            blocked_keys: Vec::new(),
         }
     }
 }
