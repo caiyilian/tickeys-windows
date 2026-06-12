@@ -1,7 +1,6 @@
 #![allow(static_mut_refs)]
 
 mod audio;
-#[allow(dead_code)]
 mod config;
 #[allow(dead_code)]
 mod consts;
@@ -26,8 +25,6 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 static mut KEYMAP: Option<BTreeMap<u8, u8>> = None;
 static mut FIRST_N_NON_UNIQUE: i16 = -1;
-static mut CURRENT_VOLUME: f32 = 1.0;
-static mut CURRENT_PITCH: f32 = 1.0;
 
 fn switch_scheme(name: &str) {
     let scheme = match schemes::find_scheme(name) {
@@ -67,21 +64,45 @@ fn switch_scheme(name: &str) {
         audio::load_audio_data(audio_data);
     }
 
-    unsafe {
-        audio::set_volume(CURRENT_VOLUME);
-        audio::set_pitch(CURRENT_PITCH);
-    }
+    apply_audio_settings();
 
     log::info!("Switched to scheme: {} ({} sounds)", scheme.display_name, scheme.files.len());
+
+    if let Some(mut cfg) = config::get_config() {
+        cfg.scheme = scheme.name.clone();
+        config::update_config(&cfg);
+    }
+}
+
+fn apply_audio_settings() {
+    if let Some(cfg) = config::get_config() {
+        audio::set_volume(cfg.volume);
+        audio::set_pitch(cfg.pitch);
+    }
 }
 
 fn load_default_scheme() {
     schemes::load_schemes();
-    if let Some(name) = schemes::first_scheme_name() {
-        switch_scheme(&name);
+    let cfg = config::init_config();
+
+    let scheme_name = if cfg.scheme.is_empty() || schemes::find_scheme(&cfg.scheme).is_none() {
+        match schemes::first_scheme_name() {
+            Some(name) => {
+                let mut c = cfg.clone();
+                c.scheme = name.clone();
+                config::update_config(&c);
+                name
+            }
+            None => {
+                log::warn!("No schemes loaded, audio playback disabled");
+                return;
+            }
+        }
     } else {
-        log::warn!("No schemes loaded, audio playback disabled");
-    }
+        cfg.scheme.clone()
+    };
+
+    switch_scheme(&scheme_name);
 }
 
 fn map_key_to_audio(vk_code: u16) -> Option<usize> {
