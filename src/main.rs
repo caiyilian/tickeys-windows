@@ -1,12 +1,32 @@
 #![windows_subsystem = "windows"]
 
+#[allow(dead_code)]
+mod audio;
+#[allow(dead_code)]
+mod config;
+#[allow(dead_code)]
+mod consts;
+#[allow(dead_code)]
+mod filter;
+#[allow(dead_code)]
+mod gui;
+#[allow(dead_code)]
+mod keyboard;
+mod logging;
+#[allow(dead_code)]
+mod power;
+#[allow(dead_code)]
+mod schemes;
+#[allow(dead_code)]
+mod tray;
+
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 fn main() {
-    env_logger::init();
+    logging::init();
 
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
