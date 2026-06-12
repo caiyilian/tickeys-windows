@@ -577,8 +577,46 @@ fn create_controls(hwnd: isize) {
             0,
             0,
             400,
-            380,
+            400,
             SWP_NOMOVE | SWP_NOZORDER,
+        );
+
+        // Version label at bottom
+        let version_text = format!("v{}", crate::consts::CURRENT_VERSION);
+        let version_utf16: Vec<u16> = version_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let _version_label_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(version_utf16.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000010), // SS_CENTER | SS_NOTIFY
+            20,
+            380,
+            360,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(14 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        // Website link
+        let website_text = "\u{8BBF}\u{95EE}\u{5B98}\u{7F51}";
+        let website_utf16: Vec<u16> = website_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let _website_label_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(website_utf16.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000010 | 0x00000200), // SS_CENTER | SS_NOTIFY
+            20,
+            380,
+            360,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(15 as *mut _)),
+            Some(instance.into()),
+            None,
         );
     }
 }
@@ -715,6 +753,9 @@ unsafe extern "system" fn settings_wnd_proc(
 
                 log::info!("Pitch changed to {:.1}", pitch);
             }
+            LRESULT::default()
+        }
+        WM_NOTIFY => {
             LRESULT::default()
         }
         WM_CLOSE => {
