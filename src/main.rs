@@ -137,6 +137,11 @@ fn map_key_to_audio(vk_code: u16) -> Option<usize> {
 }
 
 fn main() {
+    // Set DPI awareness before any window creation
+    unsafe {
+        SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+    }
+
     logging::init();
 
     if let Err(e) = audio::init() {
@@ -279,4 +284,9 @@ unsafe extern "system" fn wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+#[link(name = "shcore")]
+extern "system" {
+    fn SetProcessDpiAwareness(value: u32);
 }
