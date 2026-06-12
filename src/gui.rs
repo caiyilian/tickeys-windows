@@ -681,7 +681,7 @@ unsafe extern "system" fn settings_wnd_proc(
             let code = (wparam.0 >> 16) & 0xFFFF;
             let id = wparam.0 & 0xFFFF;
 
-            if id == 1 && code == 0 { // CBN_SELCHANGE for scheme selector
+            if id == 1 && code == 1 { // CBN_SELCHANGE for scheme selector
                 let combo_hwnd = *COMBOBOX_HWND.lock().unwrap();
                 if combo_hwnd != 0 {
                     let index = SendMessageW(
@@ -699,7 +699,7 @@ unsafe extern "system" fn settings_wnd_proc(
                         }
                     }
                 }
-            } else if id == 7 && code == 0 { // CBN_SELCHANGE for max sources
+            } else if id == 7 && code == 1 { // CBN_SELCHANGE for max sources
                 let max_sources_combo = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
                 if max_sources_combo != 0 {
                     let index = SendMessageW(
