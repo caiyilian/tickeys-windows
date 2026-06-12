@@ -99,6 +99,40 @@ pub fn uninstall_foreground_hook() {
     }
 }
 
+pub fn should_mute(app_name: &str, list: &[String], mode: &str) -> bool {
+    if list.is_empty() {
+        return false;
+    }
+    let in_list = list.iter().any(|s| s == app_name);
+    match mode {
+        "BlackList" => in_list,
+        "WhiteList" => !in_list,
+        _ => false,
+    }
+}
+
+pub fn check_and_apply_mute() {
+    let app = get_foreground_process_name();
+    let cfg = crate::config::get_config();
+    match (app, cfg) {
+        (Some(ref name), Some(ref cfg)) => {
+            let mode = if cfg.filter_mode == crate::config::FilterMode::BlackList {
+                "BlackList"
+            } else {
+                "WhiteList"
+            };
+            let muted = should_mute(name, &cfg.filter_list, mode);
+            crate::audio::set_mute(muted);
+            log::info!("App: {} filter={} list_len={} muted={}", name, mode, cfg.filter_list.len(), muted);
+        }
+        (None, _) => {
+            crate::audio::set_mute(false);
+            log::info!("No foreground app detected, unmuted");
+        }
+        _ => {}
+    }
+}
+
 unsafe extern "system" fn foreground_event_proc(
     _hhook: isize,
     _event: u32,
