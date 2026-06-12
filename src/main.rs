@@ -106,6 +106,12 @@ fn load_default_scheme() {
 }
 
 fn map_key_to_audio(vk_code: u16) -> Option<usize> {
+    if let Some(cfg) = config::get_config() {
+        if cfg.blocked_keys.contains(&vk_code) {
+            return None;
+        }
+    }
+
     let keycode = vk_code as u8;
     unsafe {
         let keymap = KEYMAP.take();
