@@ -10,6 +10,40 @@ const TBM_SETRANGE: u32 = 0x0406;
 const TBM_SETPOS: u32 = 0x0407;
 const TBM_GETPOS: u32 = 0x0400;
 
+#[repr(C)]
+#[allow(non_snake_case)]
+struct LVCOLUMNW {
+    pub mask: u32,
+    pub fmt: i32,
+    pub cx: i32,
+    pub pszText: *const u16,
+    pub cchTextMax: i32,
+    pub iSubItem: i32,
+    pub iImage: i32,
+    pub iOrder: i32,
+    pub cxMin: i32,
+    pub cxDefault: i32,
+    pub cxIdeal: i32,
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+struct LVCITEMW {
+    pub mask: u32,
+    pub iItem: i32,
+    pub iSubItem: i32,
+    pub state: u32,
+    pub stateMask: u32,
+    pub pszText: *mut u16,
+    pub cchTextMax: i32,
+    pub iImage: i32,
+    pub lParam: isize,
+    pub iIndent: i32,
+    pub iGroupId: i32,
+    pub cColumns: u32,
+    pub puColumns: *mut u32,
+}
+
 static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
 static COMBOBOX_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
@@ -17,6 +51,9 @@ static VOLUME_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static MAX_SOURCES_COMBO_HWND: Mutex<isize> = Mutex::new(0);
+static FILTER_LISTVIEW_HWND: Mutex<isize> = Mutex::new(0);
+static BLACKLIST_RADIO_HWND: Mutex<isize> = Mutex::new(0);
+static WHITELIST_RADIO_HWND: Mutex<isize> = Mutex::new(0);
 
 pub struct SettingsWindow;
 
@@ -367,6 +404,182 @@ fn create_controls(hwnd: isize) {
 
             log::info!("Max sources ComboBox created with current value {}", current_max_sources);
         }
+
+        // Filter section - ListView
+        let filter_label_text = "\u{9ED1}\u{767D}\u{540D}\u{5355}";
+        let filter_label_utf16: Vec<u16> = filter_label_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let _filter_label_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(filter_label_utf16.as_ptr()),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            180,
+            100,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(8 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        // Get current config for filter list
+        let current_config = crate::config::get_config();
+        let filter_list = current_config.as_ref().map(|c| &c.filter_list).cloned().unwrap_or_default();
+        let filter_mode = current_config.as_ref().map(|c| c.filter_mode.clone()).unwrap_or(crate::config::FilterMode::BlackList);
+
+        // ListView for filter list
+        let filter_listview_hwnd = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("SysListView32"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0001 | 0x0002), // LVS_REPORT | LVS_SHOWSELALWAYS
+            20,
+            200,
+            360,
+            100,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(9 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(filter_listview_hwnd) = filter_listview_hwnd {
+            *FILTER_LISTVIEW_HWND.lock().unwrap() = filter_listview_hwnd.0 as isize;
+
+            // Add column
+            let column_text = "\u{5E94}\u{7528}\u{540D}\u{79F0}";
+            let column_text_utf16: Vec<u16> = column_text.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut column = LVCOLUMNW {
+                mask: 0x0001, // LVCF_TEXT
+                pszText: column_text_utf16.as_ptr(),
+                cx: 340,
+                ..std::mem::zeroed()
+            };
+            let _ = SendMessageW(
+                filter_listview_hwnd,
+                0x1006, // LVM_INSERTCOLUMNW
+                Some(WPARAM(0)),
+                Some(LPARAM(&mut column as *mut _ as isize)),
+            );
+
+            // Load items into ListView
+            for (index, app_name) in filter_list.iter().enumerate() {
+                let app_name_utf16: Vec<u16> = app_name.encode_utf16().chain(std::iter::once(0)).collect();
+                let mut item = LVCITEMW {
+                    mask: 0x0001, // LVCF_TEXT
+                    iItem: index as i32,
+                    pszText: app_name_utf16.as_ptr() as *mut _,
+                    ..std::mem::zeroed()
+                };
+                let _ = SendMessageW(
+                    filter_listview_hwnd,
+                    0x1007, // LVM_INSERTITEMW
+                    Some(WPARAM(0)),
+                    Some(LPARAM(&mut item as *mut _ as isize)),
+                );
+            }
+
+            log::info!("Filter ListView created with {} items", filter_list.len());
+        }
+
+        // Radio buttons for filter mode
+        let blacklist_radio_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("\u{9ED1}\u{540D}\u{5355}"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0009), // BS_AUTORADIOBUTTON
+            20,
+            310,
+            80,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(10 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        let whitelist_radio_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("\u{767D}\u{540D}\u{5355}"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0009), // BS_AUTORADIOBUTTON
+            110,
+            310,
+            80,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(11 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        if let Ok(blacklist_radio_hwnd) = blacklist_radio_hwnd {
+            *BLACKLIST_RADIO_HWND.lock().unwrap() = blacklist_radio_hwnd.0 as isize;
+            if filter_mode == crate::config::FilterMode::BlackList {
+                let _ = SendMessageW(
+                    blacklist_radio_hwnd,
+                    0x00F1, // BM_SETCHECK
+                    Some(WPARAM(1)), // BST_CHECKED
+                    Some(LPARAM(0)),
+                );
+            }
+        }
+
+        if let Ok(whitelist_radio_hwnd) = whitelist_radio_hwnd {
+            *WHITELIST_RADIO_HWND.lock().unwrap() = whitelist_radio_hwnd.0 as isize;
+            if filter_mode == crate::config::FilterMode::WhiteList {
+                let _ = SendMessageW(
+                    whitelist_radio_hwnd,
+                    0x00F1, // BM_SETCHECK
+                    Some(WPARAM(1)), // BST_CHECKED
+                    Some(LPARAM(0)),
+                );
+            }
+        }
+
+        // Add/Remove buttons
+        let _add_button_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("\u{6DFB}\u{52A0}"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
+            300,
+            310,
+            40,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(12 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        let _remove_button_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("\u{79FB}\u{9664}"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
+            340,
+            310,
+            40,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(13 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        // Adjust window size to fit new controls
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            0,
+            0,
+            400,
+            380,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
     }
 }
 
@@ -421,6 +634,24 @@ unsafe extern "system" fn settings_wnd_proc(
                         log::info!("Max sources changed to {}", new_max_sources);
                     }
                 }
+            } else if id == 10 && code == 0 { // BlackList radio button
+                if let Some(mut cfg) = crate::config::get_config() {
+                    cfg.filter_mode = crate::config::FilterMode::BlackList;
+                    crate::config::update_config(&cfg);
+                    log::info!("Filter mode changed to BlackList");
+                }
+            } else if id == 11 && code == 0 { // WhiteList radio button
+                if let Some(mut cfg) = crate::config::get_config() {
+                    cfg.filter_mode = crate::config::FilterMode::WhiteList;
+                    crate::config::update_config(&cfg);
+                    log::info!("Filter mode changed to WhiteList");
+                }
+            } else if id == 12 && code == 0 { // Add button
+                // TODO: Open file dialog to add applications
+                log::info!("Add application button clicked");
+            } else if id == 13 && code == 0 { // Remove button
+                // TODO: Remove selected items from ListView
+                log::info!("Remove application button clicked");
             }
             LRESULT::default()
         }
@@ -498,6 +729,9 @@ unsafe extern "system" fn settings_wnd_proc(
             *PITCH_SLIDER_HWND.lock().unwrap() = 0;
             *PITCH_LABEL_HWND.lock().unwrap() = 0;
             *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
+            *FILTER_LISTVIEW_HWND.lock().unwrap() = 0;
+            *BLACKLIST_RADIO_HWND.lock().unwrap() = 0;
+            *WHITELIST_RADIO_HWND.lock().unwrap() = 0;
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
