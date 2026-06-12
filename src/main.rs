@@ -10,7 +10,6 @@ mod consts;
 mod filter;
 #[allow(dead_code)]
 mod gui;
-#[allow(dead_code)]
 mod keyboard;
 mod logging;
 #[allow(dead_code)]
@@ -20,6 +19,7 @@ mod schemes;
 #[allow(dead_code)]
 mod tray;
 
+use consts::*;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -61,6 +61,12 @@ fn main() {
             return;
         }
 
+        let hwnd = hwnd.unwrap();
+
+        if let Err(e) = keyboard::install(hwnd) {
+            log::error!("{e}");
+        }
+
         log::info!("Tickeys Windows started");
 
         let mut msg = MSG::default();
@@ -78,7 +84,13 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_KEYDOWN_HOOK => {
+            let vk_code = wparam.0 as u16;
+            log::info!("Key pressed: VK={vk_code} (0x{vk_code:02X})");
+            LRESULT::default()
+        }
         WM_DESTROY => {
+            keyboard::uninstall();
             PostQuitMessage(0);
             LRESULT::default()
         }
