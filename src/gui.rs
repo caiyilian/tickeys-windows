@@ -44,6 +44,34 @@ struct LVCITEMW {
     pub puColumns: *mut u32,
 }
 
+#[repr(C)]
+#[allow(non_snake_case)]
+struct OPENFILENAMEW {
+    pub lStructSize: u32,
+    pub hwndOwner: HWND,
+    pub hInstance: isize,
+    pub lpstrFilter: *const u16,
+    pub lpstrCustomFilter: *mut u16,
+    pub nMaxCustFilter: u32,
+    pub nFilterIndex: u32,
+    pub lpstrFile: *mut u16,
+    pub nMaxFile: u32,
+    pub lpstrFileTitle: *mut u16,
+    pub nMaxFileTitle: u32,
+    pub lpstrInitialDir: *const u16,
+    pub lpstrTitle: *const u16,
+    pub Flags: u32,
+    pub nFileOffset: u16,
+    pub nFileExtension: u16,
+    pub lpstrDefExt: *const u16,
+    pub lCustData: isize,
+    pub lpfnHook: isize,
+    pub lpTemplateName: *const u16,
+    pub pvReserved: *mut std::ffi::c_void,
+    pub dwReserved: u32,
+    pub FlagsEx: u32,
+}
+
 static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
 static COMBOBOX_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
@@ -685,11 +713,116 @@ unsafe extern "system" fn settings_wnd_proc(
                     log::info!("Filter mode changed to WhiteList");
                 }
             } else if id == 12 && code == 0 { // Add button
-                // TODO: Open file dialog to add applications
-                log::info!("Add application button clicked");
+                // Open file dialog to add applications
+                let hwnd = HWND(hwnd.0 as *mut _);
+                let mut file_path = [0u16; 260];
+                let filter_text = "Applications (*.exe)\0*.exe\0\0";
+                let filter_utf16: Vec<u16> = filter_text.encode_utf16().chain(std::iter::once(0)).collect();
+                let title_text = "\u{6DFB}\u{52A0}\u{5E94}\u{7528}";
+                let title_utf16: Vec<u16> = title_text.encode_utf16().chain(std::iter::once(0)).collect();
+                let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+                ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFilter = filter_utf16.as_ptr();
+                ofn.lpstrFile = file_path.as_mut_ptr();
+                ofn.nMaxFile = 260;
+                ofn.lpstrTitle = title_utf16.as_ptr();
+                ofn.Flags = 0x00080000 | 0x00001000 | 0x00000200; // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT
+
+                if unsafe { GetOpenFileNameW(&mut ofn) } != 0 {
+                    // Parse selected files
+                    let files: Vec<String> = file_path
+                        .split(|&c| c == 0)
+                        .filter(|s| !s.is_empty())
+                        .skip(1) // Skip directory
+                        .filter_map(|s| {
+                            let path_str = String::from_utf16_lossy(s);
+                            let path = std::path::Path::new(&path_str);
+                            path.file_name().map(|n| n.to_string_lossy().to_string())
+                        })
+                        .collect();
+
+                    if !files.is_empty() {
+                        if let Some(mut cfg) = crate::config::get_config() {
+                            for file in &files {
+                                if !cfg.filter_list.contains(file) {
+                                    cfg.filter_list.push(file.clone());
+                                }
+                            }
+                            cfg.filter_list.sort();
+                            cfg.filter_list.dedup();
+                            crate::config::update_config(&cfg);
+
+                            // Update ListView
+                            let listview_hwnd = *FILTER_LISTVIEW_HWND.lock().unwrap();
+                            if listview_hwnd != 0 {
+                                for file in &files {
+                                    let app_name_utf16: Vec<u16> = file.encode_utf16().chain(std::iter::once(0)).collect();
+                                    let mut item = LVCITEMW {
+                                        mask: 0x0001, // LVCF_TEXT
+                                        iItem: cfg.filter_list.len() as i32 - 1,
+                                        pszText: app_name_utf16.as_ptr() as *mut _,
+                                        ..std::mem::zeroed()
+                                    };
+                                    let _ = SendMessageW(
+                                        HWND(listview_hwnd as *mut _),
+                                        0x1007, // LVM_INSERTITEMW
+                                        Some(WPARAM(0)),
+                                        Some(LPARAM(&mut item as *mut _ as isize)),
+                                    );
+                                }
+                            }
+
+                            log::info!("Added {} applications to filter list", files.len());
+                        }
+                    }
+                }
             } else if id == 13 && code == 0 { // Remove button
-                // TODO: Remove selected items from ListView
-                log::info!("Remove application button clicked");
+                // Remove selected items from ListView
+                let listview_hwnd = *FILTER_LISTVIEW_HWND.lock().unwrap();
+                if listview_hwnd != 0 {
+                    let mut selected_indices = Vec::new();
+                    let mut index = -1;
+
+                    // Get selected items (in reverse order to remove from end)
+                    loop {
+                        index = SendMessageW(
+                            HWND(listview_hwnd as *mut _),
+                            0x100C, // LVM_GETNEXTITEM
+                            Some(WPARAM(index as usize)),
+                            Some(LPARAM(0x0002)), // LVNI_SELECTED
+                        ).0 as i32;
+
+                        if index == -1 {
+                            break;
+                        }
+                        selected_indices.push(index);
+                    }
+
+                    if !selected_indices.is_empty() {
+                        // Remove from ListView (reverse order)
+                        for &idx in selected_indices.iter().rev() {
+                            let _ = SendMessageW(
+                                HWND(listview_hwnd as *mut _),
+                                0x1008, // LVM_DELETEITEM
+                                Some(WPARAM(idx as usize)),
+                                Some(LPARAM(0)),
+                            );
+                        }
+
+                        // Update config
+                        if let Some(mut cfg) = crate::config::get_config() {
+                            // Remove items in reverse order to maintain correct indices
+                            for &idx in selected_indices.iter().rev() {
+                                if (idx as usize) < cfg.filter_list.len() {
+                                    cfg.filter_list.remove(idx as usize);
+                                }
+                            }
+                            crate::config::update_config(&cfg);
+                            log::info!("Removed {} applications from filter list", selected_indices.len());
+                        }
+                    }
+                }
             }
             LRESULT::default()
         }
@@ -777,4 +910,9 @@ unsafe extern "system" fn settings_wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+#[link(name = "comdlg32")]
+extern "system" {
+    fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
 }
