@@ -1,11 +1,41 @@
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::path::Path;
 use std::ptr;
 use std::sync::Mutex;
 
 static mut DEVICE: *mut std::ffi::c_void = ptr::null_mut();
 static mut CONTEXT: *mut std::ffi::c_void = ptr::null_mut();
+
+pub fn get_resource_path(sub: &str) -> PathBuf {
+    let candidates: [&dyn Fn() -> Option<PathBuf>; 4] = [
+        &|| {
+            let exe = std::env::current_exe().ok()?;
+            let dir = exe.parent()?.join("data").join(sub);
+            if dir.exists() { Some(dir) } else { None }
+        },
+        &|| {
+            let exe = std::env::current_exe().ok()?;
+            let dir = exe.parent()?.parent()?.parent()?.join("resource").join("data").join(sub);
+            if dir.exists() { Some(dir) } else { None }
+        },
+        &|| {
+            let dir = PathBuf::from("resource/data").join(sub);
+            if dir.exists() { Some(dir) } else { None }
+        },
+        &|| {
+            let dir = PathBuf::from("data").join(sub);
+            if dir.exists() { Some(dir) } else { None }
+        },
+    ];
+    for f in &candidates {
+        if let Some(p) = f() {
+            return p;
+        }
+    }
+    PathBuf::from("resource/data").join(sub)
+}
 
 pub struct AudioData {
     buffer: ALuint,
@@ -173,6 +203,21 @@ impl SimpleAudioPlayer {
         self.source_cache.clear();
         self.data.clear();
     }
+
+    pub fn rebuild(&mut self, max_source_count: usize) {
+        if max_source_count == 0 || max_source_count == self._max_source_count {
+            return;
+        }
+        let current_data = std::mem::take(&mut self.data);
+        let mut sources = VecDeque::with_capacity(max_source_count);
+        for _ in 0..max_source_count {
+            sources.push_back(AudioSource::new().unwrap());
+        }
+        self.source_cache = sources;
+        self._max_source_count = max_source_count;
+        self.load_data(current_data);
+        log::info!("Player rebuilt with {max_source_count} sources");
+    }
 }
 
 impl Drop for SimpleAudioPlayer {
@@ -219,6 +264,13 @@ pub fn set_pitch(pitch: f32) {
 pub fn shutdown_player() {
     let mut guard = PLAYER.lock().unwrap();
     *guard = None;
+}
+
+pub fn rebuild_player(max_sources: usize) {
+    let mut guard = PLAYER.lock().unwrap();
+    if let Some(ref mut player) = *guard {
+        player.rebuild(max_sources);
+    }
 }
 
 pub fn init() -> Result<(), String> {
