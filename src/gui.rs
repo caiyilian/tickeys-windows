@@ -4,11 +4,17 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const TBS_HORZ: u32 = 0;
-const TBS_AUTOTICKS: u32 = 0x0008;
-const TBM_SETRANGE: u32 = 0x0406;
-const TBM_SETPOS: u32 = 0x0407;
+const TBS_HORZ: u32 = 0x0000;
+const TBS_AUTOTICKS: u32 = 0x0001;
 const TBM_GETPOS: u32 = 0x0400;
+const TBM_SETPOS: u32 = 0x0405;
+const TBM_SETRANGE: u32 = 0x0406;
+const TB_THUMBPOSITION: u32 = 4;
+const TB_THUMBTRACK: u32 = 5;
+const VOLUME_SLIDER_MIN: i32 = 0;
+const VOLUME_SLIDER_MAX: i32 = 500;
+const PITCH_SLIDER_MIN: i32 = 50;
+const PITCH_SLIDER_MAX: i32 = 200;
 
 #[repr(C)]
 #[allow(non_snake_case)]
@@ -195,6 +201,33 @@ fn center_window(hwnd: isize) {
     }
 }
 
+fn make_trackbar_range(min: i32, max: i32) -> LPARAM {
+    LPARAM(((min as u32 & 0xFFFF) | ((max as u32 & 0xFFFF) << 16)) as isize)
+}
+
+unsafe fn trackbar_scroll_position(
+    slider_hwnd: isize,
+    wparam: WPARAM,
+    min: i32,
+    max: i32,
+) -> i32 {
+    let scroll_code = (wparam.0 & 0xFFFF) as u32;
+    let position = match scroll_code {
+        TB_THUMBPOSITION | TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
+        _ => {
+            SendMessageW(
+                HWND(slider_hwnd as *mut _),
+                TBM_GETPOS,
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            )
+            .0 as i32
+        }
+    };
+
+    position.clamp(min, max)
+}
+
 fn create_controls(hwnd: isize) {
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
@@ -295,20 +328,21 @@ fn create_controls(hwnd: isize) {
                 .map(|c| c.volume)
                 .unwrap_or(0.5);
 
-            let slider_pos = (current_volume * 100.0) as isize;
+            let slider_pos = ((current_volume * 100.0).round() as i32)
+                .clamp(VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX);
 
             let _ = SendMessageW(
                 volume_slider_hwnd,
                 TBM_SETRANGE,
                 Some(WPARAM(1)),
-                Some(LPARAM(((0 << 16) | 500) as isize)),
+                Some(make_trackbar_range(VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX)),
             );
 
             let _ = SendMessageW(
                 volume_slider_hwnd,
                 TBM_SETPOS,
                 Some(WPARAM(1)),
-                Some(LPARAM(slider_pos)),
+                Some(LPARAM(slider_pos as isize)),
             );
 
             let percentage = (current_volume * 100.0) as i32;
@@ -370,20 +404,21 @@ fn create_controls(hwnd: isize) {
         if let Ok(pitch_slider_hwnd) = pitch_slider_hwnd {
             *PITCH_SLIDER_HWND.lock().unwrap() = pitch_slider_hwnd.0 as isize;
 
-            let slider_pos = (current_pitch * 100.0) as isize;
+            let slider_pos = ((current_pitch * 100.0).round() as i32)
+                .clamp(PITCH_SLIDER_MIN, PITCH_SLIDER_MAX);
 
             let _ = SendMessageW(
                 pitch_slider_hwnd,
                 TBM_SETRANGE,
                 Some(WPARAM(1)),
-                Some(LPARAM(((50 << 16) | 200) as isize)),
+                Some(make_trackbar_range(PITCH_SLIDER_MIN, PITCH_SLIDER_MAX)),
             );
 
             let _ = SendMessageW(
                 pitch_slider_hwnd,
                 TBM_SETPOS,
                 Some(WPARAM(1)),
-                Some(LPARAM(slider_pos)),
+                Some(LPARAM(slider_pos as isize)),
             );
 
             log::info!("Pitch slider created with {:.1}", current_pitch);
@@ -852,14 +887,21 @@ unsafe extern "system" fn settings_wnd_proc(
             let pitch_slider = *PITCH_SLIDER_HWND.lock().unwrap();
             
             if volume_slider != 0 && lparam.0 as isize == volume_slider {
-                let pos = SendMessageW(
-                    HWND(volume_slider as *mut _),
-                    TBM_GETPOS,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(0)),
+                let pos = trackbar_scroll_position(
+                    volume_slider,
+                    wparam,
+                    VOLUME_SLIDER_MIN,
+                    VOLUME_SLIDER_MAX,
                 );
 
-                let volume = pos.0 as f32 / 100.0;
+                let _ = SendMessageW(
+                    HWND(volume_slider as *mut _),
+                    TBM_SETPOS,
+                    Some(WPARAM(1)),
+                    Some(LPARAM(pos as isize)),
+                );
+
+                let volume = pos as f32 / 100.0;
                 crate::audio::set_volume(volume);
 
                 if let Some(mut cfg) = crate::config::get_config() {
@@ -880,14 +922,21 @@ unsafe extern "system" fn settings_wnd_proc(
 
                 log::info!("Volume changed to {}%", percentage);
             } else if pitch_slider != 0 && lparam.0 as isize == pitch_slider {
-                let pos = SendMessageW(
-                    HWND(pitch_slider as *mut _),
-                    TBM_GETPOS,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(0)),
+                let pos = trackbar_scroll_position(
+                    pitch_slider,
+                    wparam,
+                    PITCH_SLIDER_MIN,
+                    PITCH_SLIDER_MAX,
                 );
 
-                let pitch = pos.0 as f32 / 100.0;
+                let _ = SendMessageW(
+                    HWND(pitch_slider as *mut _),
+                    TBM_SETPOS,
+                    Some(WPARAM(1)),
+                    Some(LPARAM(pos as isize)),
+                );
+
+                let pitch = pos as f32 / 100.0;
                 crate::audio::set_pitch(pitch);
 
                 if let Some(mut cfg) = crate::config::get_config() {
