@@ -468,7 +468,7 @@ fn create_controls(hwnd: isize) {
 
             if let Ok(spin_hwnd) = spin_hwnd {
                 let _ = SendMessageW(spin_hwnd, UDM_SETBUDDY, Some(WPARAM(max_sources_edit_hwnd.0 as usize)), Some(LPARAM(0)));
-                let _ = SendMessageW(spin_hwnd, UDM_SETRANGE32, Some(WPARAM(20)), Some(LPARAM(2)));
+                let _ = SendMessageW(spin_hwnd, UDM_SETRANGE32, Some(WPARAM(2)), Some(LPARAM(20)));
             }
 
             *MAX_SOURCES_EDITING.lock().unwrap() = false;
