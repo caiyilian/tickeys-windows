@@ -198,6 +198,19 @@ impl SimpleAudioPlayer {
         oldest_source.connect_to_buffer(data);
         oldest_source.play();
         self.source_cache.push_back(oldest_source);
+
+        // Count how many sources are currently playing
+        let mut playing_count = 0;
+        for source in self.source_cache.iter() {
+            unsafe {
+                let mut state: ALint = 0;
+                alGetSourcei(source.id, AL_SOURCE_STATE, &mut state);
+                if state == AL_PLAYING {
+                    playing_count += 1;
+                }
+            }
+        }
+        log::info!("play: index={}, {}/{}", index, playing_count, self._max_source_count);
     }
 
     pub fn unload_data(&mut self) {
@@ -378,6 +391,8 @@ const AL_FORMAT_MONO8: ALenum = 0x1100;
 const AL_FORMAT_MONO16: ALenum = 0x1101;
 const AL_FORMAT_STEREO8: ALenum = 0x1102;
 const AL_FORMAT_STEREO16: ALenum = 0x1103;
+const AL_SOURCE_STATE: ALenum = 0x1010;
+const AL_PLAYING: ALint = 0x1012;
 
 #[link(name = "OpenAL32")]
 extern "system" {
@@ -397,4 +412,5 @@ extern "system" {
     fn alSourceStop(source: ALuint);
     fn alDeleteSources(n: ALsizei, sources: *const ALuint);
     fn alGetError() -> ALenum;
+    fn alGetSourcei(source: ALuint, param: ALenum, value: *mut ALint);
 }

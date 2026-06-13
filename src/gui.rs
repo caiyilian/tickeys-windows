@@ -15,6 +15,10 @@ const VOLUME_SLIDER_MIN: i32 = 0;
 const VOLUME_SLIDER_MAX: i32 = 500;
 const PITCH_SLIDER_MIN: i32 = 50;
 const PITCH_SLIDER_MAX: i32 = 200;
+const UDM_SETRANGE32: u32 = 0x0467;
+const UDM_SETPOS32: u32 = 0x0468;
+const UDM_SETBUDDY: u32 = 0x0469;
+const EN_CHANGE: u32 = 0x0300;
 
 #[repr(C)]
 #[allow(non_snake_case)]
@@ -85,6 +89,7 @@ static VOLUME_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static MAX_SOURCES_COMBO_HWND: Mutex<isize> = Mutex::new(0);
+static MAX_SOURCES_EDITING: Mutex<bool> = Mutex::new(false);
 static FILTER_LISTVIEW_HWND: Mutex<isize> = Mutex::new(0);
 static BLACKLIST_RADIO_HWND: Mutex<isize> = Mutex::new(0);
 static WHITELIST_RADIO_HWND: Mutex<isize> = Mutex::new(0);
@@ -443,50 +448,77 @@ fn create_controls(hwnd: isize) {
             None,
         );
 
-        // Max sources ComboBox
-        let max_sources_combo_hwnd = CreateWindowExW(
+        // Max sources Edit + Up-Down (Spin)
+        let current_max_sources = crate::config::get_config()
+            .map(|c| c.max_sources)
+            .unwrap_or(2);
+
+        let max_sources_edit_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("COMBOBOX"),
+            w!("EDIT"),
             None,
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(0x0080), // ES_AUTOHSCROLL
             120,
             140,
-            260,
-            200,
+            80,
+            20,
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(7 as *mut _)),
             Some(instance.into()),
             None,
         );
 
-        if let Ok(max_sources_combo_hwnd) = max_sources_combo_hwnd {
-            *MAX_SOURCES_COMBO_HWND.lock().unwrap() = max_sources_combo_hwnd.0 as isize;
+        if let Ok(max_sources_edit_hwnd) = max_sources_edit_hwnd {
+            *MAX_SOURCES_COMBO_HWND.lock().unwrap() = max_sources_edit_hwnd.0 as isize;
 
-            let current_max_sources = crate::config::get_config()
-                .map(|c| c.max_sources)
-                .unwrap_or(2);
+            let spin_hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("msctls_updown32"),
+                None,
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0002), // UDS_SETBUDDYINT
+                200,
+                140,
+                20,
+                20,
+                Some(HWND(hwnd as *mut _)),
+                Some(HMENU(16 as *mut _)),
+                Some(instance.into()),
+                None,
+            );
 
-            for i in 1..=6 {
-                let option_text = format!("{}", i);
-                let option_utf16: Vec<u16> = option_text.encode_utf16().chain(std::iter::once(0)).collect();
+            if let Ok(spin_hwnd) = spin_hwnd {
+                // Attach spin to edit control
                 let _ = SendMessageW(
-                    max_sources_combo_hwnd,
-                    CB_ADDSTRING,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(option_utf16.as_ptr() as isize)),
+                    spin_hwnd,
+                    UDM_SETBUDDY,
+                    Some(WPARAM(max_sources_edit_hwnd.0 as usize)),
+                    Some(LPARAM(0)),
                 );
-
-                if i == current_max_sources {
-                    let _ = SendMessageW(
-                        max_sources_combo_hwnd,
-                        CB_SETCURSEL,
-                        Some(WPARAM((i - 1) as usize)),
-                        Some(LPARAM(0)),
-                    );
-                }
+                // Set range 2-20 (wParam = max, lParam = min)
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETRANGE32,
+                    Some(WPARAM(20)),
+                    Some(LPARAM(2)),
+                );
+                // Set initial value
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETPOS32,
+                    Some(WPARAM(1)),
+                    Some(LPARAM(current_max_sources as isize)),
+                );
             }
 
-            log::info!("Max sources ComboBox created with current value {}", current_max_sources);
+            // Set text AFTER up-down control is configured
+            let init_text = format!("{}", current_max_sources);
+            let init_utf16: Vec<u16> = init_text.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SetWindowTextW(
+                max_sources_edit_hwnd,
+                PCWSTR(init_utf16.as_ptr()),
+            );
+
+            log::info!("Max sources Edit created with current value {}", current_max_sources);
         }
 
         // Filter section - ListView
@@ -734,27 +766,53 @@ unsafe extern "system" fn settings_wnd_proc(
                         }
                     }
                 }
-            } else if id == 7 && code == 1 { // CBN_SELCHANGE for max sources
-                let max_sources_combo = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
-                if max_sources_combo != 0 {
-                    let index = SendMessageW(
-                        HWND(max_sources_combo as *mut _),
-                        CB_GETCURSEL,
-                        Some(WPARAM(0)),
-                        Some(LPARAM(0)),
-                    );
-
-                    if index.0 != -1 {
-                        let new_max_sources = (index.0 + 1) as usize;
-                        crate::audio::rebuild_player(new_max_sources);
-
-                        if let Some(mut cfg) = crate::config::get_config() {
-                            cfg.max_sources = new_max_sources;
-                            crate::config::update_config(&cfg);
-                        }
-
-                        log::info!("Max sources changed to {}", new_max_sources);
+            } else if id == 7 && code == EN_CHANGE as usize { // EN_CHANGE for max sources Edit
+                let max_sources_edit = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
+                if max_sources_edit != 0 {
+                    // Guard against re-entrancy from SetWindowTextW
+                    let mut editing = MAX_SOURCES_EDITING.lock().unwrap();
+                    if *editing {
+                        return LRESULT::default();
                     }
+                    *editing = true;
+                    drop(editing);
+
+                    let mut text = [0u16; 16];
+                    let len = GetWindowTextW(HWND(max_sources_edit as *mut _), &mut text);
+                    if len > 0 {
+                        let text_str = String::from_utf16_lossy(&text[..len as usize]);
+                        log::info!("Max sources EN_CHANGE: text='{}'", text_str);
+                        match text_str.parse::<i32>() {
+                            Ok(val) => {
+                                let clamped = val.clamp(2, 20) as usize;
+                                let clean = format!("{}", clamped);
+                                let clean_utf16: Vec<u16> = clean.encode_utf16().chain(std::iter::once(0)).collect();
+                                let _ = SetWindowTextW(
+                                    HWND(max_sources_edit as *mut _),
+                                    PCWSTR(clean_utf16.as_ptr()),
+                                );
+                                crate::audio::rebuild_player(clamped);
+                                if let Some(mut cfg) = crate::config::get_config() {
+                                    cfg.max_sources = clamped;
+                                    crate::config::update_config(&cfg);
+                                }
+                                log::info!("Max sources changed to {}", clamped);
+                            }
+                            Err(_) => {
+                                let current = crate::config::get_config()
+                                    .map(|c| c.max_sources)
+                                    .unwrap_or(2);
+                                let revert = format!("{}", current);
+                                let revert_utf16: Vec<u16> = revert.encode_utf16().chain(std::iter::once(0)).collect();
+                                let _ = SetWindowTextW(
+                                    HWND(max_sources_edit as *mut _),
+                                    PCWSTR(revert_utf16.as_ptr()),
+                                );
+                            }
+                        }
+                    }
+
+                    *MAX_SOURCES_EDITING.lock().unwrap() = false;
                 }
             } else if id == 10 && code == 0 { // BlackList radio button
                 if let Some(mut cfg) = crate::config::get_config() {
@@ -984,6 +1042,7 @@ unsafe extern "system" fn settings_wnd_proc(
             *PITCH_SLIDER_HWND.lock().unwrap() = 0;
             *PITCH_LABEL_HWND.lock().unwrap() = 0;
             *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
+            *MAX_SOURCES_EDITING.lock().unwrap() = false;
             *FILTER_LISTVIEW_HWND.lock().unwrap() = 0;
             *BLACKLIST_RADIO_HWND.lock().unwrap() = 0;
             *WHITELIST_RADIO_HWND.lock().unwrap() = 0;
