@@ -82,7 +82,7 @@ struct OPENFILENAMEW {
     pub FlagsEx: u32,
 }
 
-static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
+pub static SETTINGS_HWND: Mutex<isize> = Mutex::new(0);
 static COMBOBOX_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static VOLUME_LABEL_HWND: Mutex<isize> = Mutex::new(0);
@@ -90,9 +90,65 @@ static PITCH_SLIDER_HWND: Mutex<isize> = Mutex::new(0);
 static PITCH_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static MAX_SOURCES_COMBO_HWND: Mutex<isize> = Mutex::new(0);
 static MAX_SOURCES_EDITING: Mutex<bool> = Mutex::new(false);
-static FILTER_LISTVIEW_HWND: Mutex<isize> = Mutex::new(0);
-static BLACKLIST_RADIO_HWND: Mutex<isize> = Mutex::new(0);
-static WHITELIST_RADIO_HWND: Mutex<isize> = Mutex::new(0);
+static BLOCKED_KEYS_LISTVIEW_HWND: Mutex<isize> = Mutex::new(0);
+pub static CAPTURING_KEY: Mutex<bool> = Mutex::new(false);
+pub static PENDING_KEY: Mutex<u16> = Mutex::new(0);
+static ADD_BUTTON_HWND: Mutex<isize> = Mutex::new(0);
+
+fn vk_to_name(vk: u16) -> String {
+    match vk {
+        0x08 => "Backspace".to_string(),
+        0x09 => "Tab".to_string(),
+        0x0D => "Enter".to_string(),
+        0x10 => "Shift".to_string(),
+        0x11 => "Ctrl".to_string(),
+        0x12 => "Alt".to_string(),
+        0x13 => "Pause".to_string(),
+        0x14 => "CapsLock".to_string(),
+        0x1B => "Escape".to_string(),
+        0x20 => "Space".to_string(),
+        0x21 => "PageUp".to_string(),
+        0x22 => "PageDown".to_string(),
+        0x23 => "End".to_string(),
+        0x24 => "Home".to_string(),
+        0x25 => "Left".to_string(),
+        0x26 => "Up".to_string(),
+        0x27 => "Right".to_string(),
+        0x28 => "Down".to_string(),
+        0x2C => "PrintScreen".to_string(),
+        0x2D => "Insert".to_string(),
+        0x2E => "Delete".to_string(),
+        0x5B => "LWin".to_string(),
+        0x5C => "RWin".to_string(),
+        0x60 => "Numpad0".to_string(),
+        0x61 => "Numpad1".to_string(),
+        0x62 => "Numpad2".to_string(),
+        0x63 => "Numpad3".to_string(),
+        0x64 => "Numpad4".to_string(),
+        0x65 => "Numpad5".to_string(),
+        0x66 => "Numpad6".to_string(),
+        0x67 => "Numpad7".to_string(),
+        0x68 => "Numpad8".to_string(),
+        0x69 => "Numpad9".to_string(),
+        0x6A => "Numpad*".to_string(),
+        0x6B => "Numpad+".to_string(),
+        0x6D => "Numpad-".to_string(),
+        0x6E => "Numpad.".to_string(),
+        0x6F => "Numpad/".to_string(),
+        0x70..=0x87 => format!("F{}", vk - 0x6F),
+        0x90 => "NumLock".to_string(),
+        0x91 => "ScrollLock".to_string(),
+        0xA0 => "LShift".to_string(),
+        0xA1 => "RShift".to_string(),
+        0xA2 => "LCtrl".to_string(),
+        0xA3 => "RCtrl".to_string(),
+        0xA4 => "LAlt".to_string(),
+        0xA5 => "RAlt".to_string(),
+        0x30..=0x39 => format!("{}", vk - 0x30), // 0-9
+        0x41..=0x5A => format!("{}", (vk as u8 + b'A' - 0x41) as char), // A-Z
+        _ => format!("0x{:02X}", vk),
+    }
+}
 
 pub struct SettingsWindow;
 
@@ -521,14 +577,14 @@ fn create_controls(hwnd: isize) {
             log::info!("Max sources Edit created with current value {}", current_max_sources);
         }
 
-        // Filter section - ListView
-        let filter_label_text = "\u{9ED1}\u{767D}\u{540D}\u{5355}";
-        let filter_label_utf16: Vec<u16> = filter_label_text.encode_utf16().chain(std::iter::once(0)).collect();
+        // Blocked keys section
+        let blocked_label_text = "\u{6392}\u{9664}\u{6309}\u{952E}";
+        let blocked_label_utf16: Vec<u16> = blocked_label_text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let _filter_label_hwnd = CreateWindowExW(
+        let _blocked_label_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            PCWSTR(filter_label_utf16.as_ptr()),
+            PCWSTR(blocked_label_utf16.as_ptr()),
             WS_CHILD | WS_VISIBLE,
             20,
             180,
@@ -540,13 +596,44 @@ fn create_controls(hwnd: isize) {
             None,
         );
 
-        // Get current config for filter list
-        let current_config = crate::config::get_config();
-        let filter_list = current_config.as_ref().map(|c| &c.filter_list).cloned().unwrap_or_default();
-        let filter_mode = current_config.as_ref().map(|c| c.filter_mode.clone()).unwrap_or(crate::config::FilterMode::BlackList);
+        // Add button (will change text based on capture state)
+        let add_blocked_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("\u{6DFB}\u{52A0}\u{6309}\u{952E}"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
+            120,
+            180,
+            120,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(19 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
 
-        // ListView for filter list
-        let filter_listview_hwnd = CreateWindowExW(
+        if let Ok(btn_hwnd) = add_blocked_btn {
+            *ADD_BUTTON_HWND.lock().unwrap() = btn_hwnd.0 as isize;
+        }
+
+        // Remove button
+        let _remove_blocked_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("\u{79FB}\u{9664}\u{6309}\u{952E}"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
+            240,
+            180,
+            120,
+            20,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(20 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+
+        // ListView for blocked keys
+        let blocked_listview_hwnd = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             w!("SysListView32"),
             None,
@@ -556,16 +643,16 @@ fn create_controls(hwnd: isize) {
             360,
             100,
             Some(HWND(hwnd as *mut _)),
-            Some(HMENU(9 as *mut _)),
+            Some(HMENU(18 as *mut _)),
             Some(instance.into()),
             None,
         );
 
-        if let Ok(filter_listview_hwnd) = filter_listview_hwnd {
-            *FILTER_LISTVIEW_HWND.lock().unwrap() = filter_listview_hwnd.0 as isize;
+        if let Ok(listview_hwnd) = blocked_listview_hwnd {
+            *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = listview_hwnd.0 as isize;
 
             // Add column
-            let column_text = "\u{5E94}\u{7528}\u{540D}\u{79F0}";
+            let column_text = "\u{6309}\u{952E}";
             let column_text_utf16: Vec<u16> = column_text.encode_utf16().chain(std::iter::once(0)).collect();
             let mut column = LVCOLUMNW {
                 mask: 0x0001, // LVCF_TEXT
@@ -574,117 +661,35 @@ fn create_controls(hwnd: isize) {
                 ..std::mem::zeroed()
             };
             let _ = SendMessageW(
-                filter_listview_hwnd,
-                0x1006, // LVM_INSERTCOLUMNW
+                listview_hwnd,
+                0x1061, // LVM_INSERTCOLUMNW
                 Some(WPARAM(0)),
                 Some(LPARAM(&mut column as *mut _ as isize)),
             );
 
-            // Load items into ListView
-            for (index, app_name) in filter_list.iter().enumerate() {
-                let app_name_utf16: Vec<u16> = app_name.encode_utf16().chain(std::iter::once(0)).collect();
+            // Load blocked keys from config
+            let current_config = crate::config::get_config();
+            let blocked_keys = current_config.as_ref().map(|c| &c.blocked_keys).cloned().unwrap_or_default();
+
+            for (index, &vk_code) in blocked_keys.iter().enumerate() {
+                let key_name = vk_to_name(vk_code);
+                let key_utf16: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
                 let mut item = LVCITEMW {
                     mask: 0x0001, // LVCF_TEXT
                     iItem: index as i32,
-                    pszText: app_name_utf16.as_ptr() as *mut _,
+                    pszText: key_utf16.as_ptr() as *mut _,
                     ..std::mem::zeroed()
                 };
-                let _ = SendMessageW(
-                    filter_listview_hwnd,
-                    0x1007, // LVM_INSERTITEMW
-                    Some(WPARAM(0)),
-                    Some(LPARAM(&mut item as *mut _ as isize)),
-                );
+            let _ = SendMessageW(
+                listview_hwnd,
+                0x104D, // LVM_INSERTITEMW
+                Some(WPARAM(0)),
+                Some(LPARAM(&mut item as *mut _ as isize)),
+            );
             }
 
-            log::info!("Filter ListView created with {} items", filter_list.len());
+            log::info!("Blocked keys ListView created with {} items", blocked_keys.len());
         }
-
-        // Radio buttons for filter mode
-        let blacklist_radio_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("\u{9ED1}\u{540D}\u{5355}"),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0009), // BS_AUTORADIOBUTTON
-            20,
-            310,
-            80,
-            20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(10 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-
-        let whitelist_radio_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("\u{767D}\u{540D}\u{5355}"),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0009), // BS_AUTORADIOBUTTON
-            110,
-            310,
-            80,
-            20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(11 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-
-        if let Ok(blacklist_radio_hwnd) = blacklist_radio_hwnd {
-            *BLACKLIST_RADIO_HWND.lock().unwrap() = blacklist_radio_hwnd.0 as isize;
-            if filter_mode == crate::config::FilterMode::BlackList {
-                let _ = SendMessageW(
-                    blacklist_radio_hwnd,
-                    0x00F1, // BM_SETCHECK
-                    Some(WPARAM(1)), // BST_CHECKED
-                    Some(LPARAM(0)),
-                );
-            }
-        }
-
-        if let Ok(whitelist_radio_hwnd) = whitelist_radio_hwnd {
-            *WHITELIST_RADIO_HWND.lock().unwrap() = whitelist_radio_hwnd.0 as isize;
-            if filter_mode == crate::config::FilterMode::WhiteList {
-                let _ = SendMessageW(
-                    whitelist_radio_hwnd,
-                    0x00F1, // BM_SETCHECK
-                    Some(WPARAM(1)), // BST_CHECKED
-                    Some(LPARAM(0)),
-                );
-            }
-        }
-
-        // Add/Remove buttons
-        let _add_button_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("\u{6DFB}\u{52A0}"),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
-            300,
-            310,
-            40,
-            20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(12 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-
-        let _remove_button_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("\u{79FB}\u{9664}"),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
-            340,
-            310,
-            40,
-            20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(13 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
 
         // Adjust window size to fit new controls
         let _ = SetWindowPos(
@@ -814,68 +819,41 @@ unsafe extern "system" fn settings_wnd_proc(
 
                     *MAX_SOURCES_EDITING.lock().unwrap() = false;
                 }
-            } else if id == 10 && code == 0 { // BlackList radio button
-                if let Some(mut cfg) = crate::config::get_config() {
-                    cfg.filter_mode = crate::config::FilterMode::BlackList;
-                    crate::config::update_config(&cfg);
-                    log::info!("Filter mode changed to BlackList");
-                }
-            } else if id == 11 && code == 0 { // WhiteList radio button
-                if let Some(mut cfg) = crate::config::get_config() {
-                    cfg.filter_mode = crate::config::FilterMode::WhiteList;
-                    crate::config::update_config(&cfg);
-                    log::info!("Filter mode changed to WhiteList");
-                }
-            } else if id == 12 && code == 0 { // Add button
-                // Open file dialog to add applications
-                let hwnd = HWND(hwnd.0 as *mut _);
-                let mut file_path = [0u16; 260];
-                let filter_text = "Applications (*.exe)\0*.exe\0\0";
-                let filter_utf16: Vec<u16> = filter_text.encode_utf16().chain(std::iter::once(0)).collect();
-                let title_text = "\u{6DFB}\u{52A0}\u{5E94}\u{7528}";
-                let title_utf16: Vec<u16> = title_text.encode_utf16().chain(std::iter::once(0)).collect();
-                let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
-                ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
-                ofn.hwndOwner = hwnd;
-                ofn.lpstrFilter = filter_utf16.as_ptr();
-                ofn.lpstrFile = file_path.as_mut_ptr();
-                ofn.nMaxFile = 260;
-                ofn.lpstrTitle = title_utf16.as_ptr();
-                ofn.Flags = 0x00080000 | 0x00001000 | 0x00000200; // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT
-
-                if unsafe { GetOpenFileNameW(&mut ofn) } != 0 {
-                    // Parse selected files
-                    let files: Vec<String> = file_path
-                        .split(|&c| c == 0)
-                        .filter(|s| !s.is_empty())
-                        .skip(1) // Skip directory
-                        .filter_map(|s| {
-                            let path_str = String::from_utf16_lossy(s);
-                            let path = std::path::Path::new(&path_str);
-                            path.file_name().map(|n| n.to_string_lossy().to_string())
-                        })
-                        .collect();
-
-                    if !files.is_empty() {
+            } else if id == 19 && code == 0 { // Add blocked key button
+                let capturing = *CAPTURING_KEY.lock().unwrap();
+                if !capturing {
+                    // Start capturing
+                    *CAPTURING_KEY.lock().unwrap() = true;
+                    let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+                    if btn_hwnd != 0 {
+                        let text = "\u{6309}\u{4E0B}\u{4EFB}\u{610F}\u{952E}...";
+                        let text_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = SetWindowTextW(
+                            HWND(btn_hwnd as *mut _),
+                            PCWSTR(text_utf16.as_ptr()),
+                        );
+                    }
+                    log::info!("Key capture started");
+                } else {
+                    // Confirm and add the captured key
+                    let pending = *PENDING_KEY.lock().unwrap();
+                    if pending != 0 {
                         if let Some(mut cfg) = crate::config::get_config() {
-                            for file in &files {
-                                if !cfg.filter_list.contains(file) {
-                                    cfg.filter_list.push(file.clone());
-                                }
-                            }
-                            cfg.filter_list.sort();
-                            cfg.filter_list.dedup();
-                            crate::config::update_config(&cfg);
+                            if !cfg.blocked_keys.contains(&pending) {
+                                cfg.blocked_keys.push(pending);
+                                cfg.blocked_keys.sort();
+                                cfg.blocked_keys.dedup();
+                                crate::config::update_config(&cfg);
 
-                            // Update ListView
-                            let listview_hwnd = *FILTER_LISTVIEW_HWND.lock().unwrap();
-                            if listview_hwnd != 0 {
-                                for file in &files {
-                                    let app_name_utf16: Vec<u16> = file.encode_utf16().chain(std::iter::once(0)).collect();
+                                // Update ListView
+                                let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
+                                if listview_hwnd != 0 {
+                                    let key_name = vk_to_name(pending);
+                                    let key_utf16: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
                                     let mut item = LVCITEMW {
-                                        mask: 0x0001, // LVCF_TEXT
-                                        iItem: cfg.filter_list.len() as i32 - 1,
-                                        pszText: app_name_utf16.as_ptr() as *mut _,
+                                        mask: 0x0001,
+                                        iItem: cfg.blocked_keys.len() as i32 - 1,
+                                        pszText: key_utf16.as_ptr() as *mut _,
                                         ..std::mem::zeroed()
                                     };
                                     let _ = SendMessageW(
@@ -885,20 +863,30 @@ unsafe extern "system" fn settings_wnd_proc(
                                         Some(LPARAM(&mut item as *mut _ as isize)),
                                     );
                                 }
-                            }
 
-                            log::info!("Added {} applications to filter list", files.len());
+                                log::info!("Added blocked key: {} (0x{:02X})", vk_to_name(pending), pending);
+                            }
                         }
+                        *PENDING_KEY.lock().unwrap() = 0;
+                    }
+                    // Reset button text
+                    *CAPTURING_KEY.lock().unwrap() = false;
+                    let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+                    if btn_hwnd != 0 {
+                        let text = "\u{6DFB}\u{52A0}\u{6309}\u{952E}";
+                        let text_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = SetWindowTextW(
+                            HWND(btn_hwnd as *mut _),
+                            PCWSTR(text_utf16.as_ptr()),
+                        );
                     }
                 }
-            } else if id == 13 && code == 0 { // Remove button
-                // Remove selected items from ListView
-                let listview_hwnd = *FILTER_LISTVIEW_HWND.lock().unwrap();
+            } else if id == 20 && code == 0 { // Remove blocked key button
+                let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
                 if listview_hwnd != 0 {
                     let mut selected_indices = Vec::new();
                     let mut index = -1;
 
-                    // Get selected items (in reverse order to remove from end)
                     loop {
                         index = SendMessageW(
                             HWND(listview_hwnd as *mut _),
@@ -926,14 +914,13 @@ unsafe extern "system" fn settings_wnd_proc(
 
                         // Update config
                         if let Some(mut cfg) = crate::config::get_config() {
-                            // Remove items in reverse order to maintain correct indices
                             for &idx in selected_indices.iter().rev() {
-                                if (idx as usize) < cfg.filter_list.len() {
-                                    cfg.filter_list.remove(idx as usize);
+                                if (idx as usize) < cfg.blocked_keys.len() {
+                                    cfg.blocked_keys.remove(idx as usize);
                                 }
                             }
                             crate::config::update_config(&cfg);
-                            log::info!("Removed {} applications from filter list", selected_indices.len());
+                            log::info!("Removed {} blocked keys", selected_indices.len());
                         }
                     }
                 }
@@ -1016,6 +1003,27 @@ unsafe extern "system" fn settings_wnd_proc(
             }
             LRESULT::default()
         }
+        crate::consts::WM_KEY_CAPTURED => {
+            let vk_code = wparam.0 as u16;
+            *PENDING_KEY.lock().unwrap() = vk_code;
+            *CAPTURING_KEY.lock().unwrap() = false;
+
+            let key_name = vk_to_name(vk_code);
+            log::info!("WM_KEY_CAPTURED: vk_code=0x{:02X} ({}), key_name={}", vk_code, vk_code, key_name);
+
+            // Update button text to show captured key
+            let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+            if btn_hwnd != 0 {
+                let btn_text = format!("\u{786E}\u{8BA4}\u{6DFB}\u{52A0} {}", key_name);
+                let text_utf16: Vec<u16> = btn_text.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = SetWindowTextW(
+                    HWND(btn_hwnd as *mut _),
+                    PCWSTR(text_utf16.as_ptr()),
+                );
+            }
+
+            LRESULT::default()
+        }
         WM_NOTIFY => {
             LRESULT::default()
         }
@@ -1043,9 +1051,7 @@ unsafe extern "system" fn settings_wnd_proc(
             *PITCH_LABEL_HWND.lock().unwrap() = 0;
             *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
             *MAX_SOURCES_EDITING.lock().unwrap() = false;
-            *FILTER_LISTVIEW_HWND.lock().unwrap() = 0;
-            *BLACKLIST_RADIO_HWND.lock().unwrap() = 0;
-            *WHITELIST_RADIO_HWND.lock().unwrap() = 0;
+            *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = 0;
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
