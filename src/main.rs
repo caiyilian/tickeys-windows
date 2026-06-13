@@ -219,6 +219,22 @@ unsafe extern "system" fn wnd_proc(
     match msg {
         WM_KEYDOWN_HOOK => {
             let vk_code = wparam.0 as u16;
+            // Check if we're capturing a key for the settings window
+            if *gui::CAPTURING_KEY.lock().unwrap() {
+                *gui::CAPTURING_KEY.lock().unwrap() = false;
+                *gui::PENDING_KEY.lock().unwrap() = vk_code;
+                // Send message to settings window
+                let settings_hwnd = *gui::SETTINGS_HWND.lock().unwrap();
+                if settings_hwnd != 0 {
+                    let _ = PostMessageW(
+                        Some(HWND(settings_hwnd as *mut _)),
+                        consts::WM_KEY_CAPTURED,
+                        WPARAM(vk_code as usize),
+                        LPARAM(0),
+                    );
+                }
+                return LRESULT::default();
+            }
             if let Some(index) = map_key_to_audio(vk_code) {
                 audio::play_audio(index);
             }
