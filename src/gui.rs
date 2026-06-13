@@ -480,23 +480,31 @@ fn create_controls(hwnd: isize) {
         let ui_font = settings_font();
         let title_font = settings_title_font();
 
-        let margin = 22;
-        let label_w = 104;
-        let ctrl_x = margin + label_w + 14;
-        let ctrl_w = 286;
-        let row_h = 28;
-        let mut y = 16;
+        // ======== 布局参数，改这里调整位置 ========
+        let mut client_rect = RECT::default();
+        let _ = GetClientRect(parent, &mut client_rect);
+        let client_w = (client_rect.right - client_rect.left) as i32;
 
+        let group_w = 436;      // 分组框宽度
+        let group_x = (client_w - group_w) / 2;  // 分组框居中 x
+
+        let margin = 22;        // 左边距
+        let label_w = 104;      // 标签宽度
+        let ctrl_x = margin + label_w + 14;  // 控件起始 x（标签右侧）
+        let ctrl_w = 286;       // 控件宽度
+        let row_h = 28;         // 每行高度
+        let mut y = 16;         // 当前 y 坐标（从顶部开始）
+        // ==========================================
+
+        // --- 标题 "Tickeys 设置" ---
+        // y=16, 高度=26
         let title_text = wide("Tickeys \u{8BBE}\u{7F6E}");
         let title_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             PCWSTR(title_text.as_ptr()),
-            WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            380,
-            26,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001),  // SS_CENTER
+            margin, y, 416, 26,  // x, y, 宽, 高
             Some(parent),
             Some(HMENU(101 as *mut _)),
             Some(instance.into()),
@@ -504,17 +512,16 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&title_label, title_font);
 
-        y += 28;
+        // --- 副标题 "调整键盘音效、播放性能和排除按键" ---
+        y += 28;  // 标题高度 + 间距
+        // y=44, 高度=20
         let subtitle_text = wide("\u{8C03}\u{6574}\u{952E}\u{76D8}\u{97F3}\u{6548}\u{3001}\u{64AD}\u{653E}\u{6027}\u{80FD}\u{548C}\u{6392}\u{9664}\u{6309}\u{952E}");
         let subtitle_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             PCWSTR(subtitle_text.as_ptr()),
-            WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            410,
-            20,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001),
+            margin, y, 416, 20,  // x, y, 宽, 高
             Some(parent),
             Some(HMENU(102 as *mut _)),
             Some(instance.into()),
@@ -522,18 +529,17 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&subtitle_label, ui_font);
 
-        y += 36;
+        y += 50;  // 副标题高度 + 间距
 
+        // --- "音效" 分组框 ---
+        // y=80, 分组框边框在 y-12=68, 高度=132
         let audio_group_text = wide("\u{97F3}\u{6548}");
         let audio_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             PCWSTR(audio_group_text.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
-            12,
-            y - 12,
-            436,
-            132,
+            group_x, y - 20, group_w, 140,  // 居中, y偏移, 宽, 高
             Some(parent),
             Some(HMENU(103 as *mut _)),
             Some(instance.into()),
@@ -541,16 +547,14 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&audio_group, ui_font);
 
-        // === 音效方案 ===
+        // --- 音效方案 标签 + 下拉框 ---
+        // y=80
         let _scheme_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{97F3}\u{6548}\u{65B9}\u{6848}"),
             WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            label_w,
-            row_h,
+            margin, y, label_w, row_h,  // x=22, y=80, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(100 as *mut _)),
             Some(instance.into()),
@@ -563,10 +567,7 @@ fn create_controls(hwnd: isize) {
             w!("COMBOBOX"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-            ctrl_x,
-            y,
-            ctrl_w,
-            200,
+            ctrl_x, y, ctrl_w, 200,  // x=140, y=80, 宽=286, 下拉高度=200
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(1 as *mut _)),
             Some(instance.into()),
@@ -607,9 +608,10 @@ fn create_controls(hwnd: isize) {
             }
         }
 
-        y += row_h + 16;
+        y += row_h + 16;  // 音效方案行高度 + 间距
 
-        // === 音量 ===
+        // --- 音量 标签 + 滑块 ---
+        // y=124
         let current_volume = crate::config::get_config().map(|c| c.volume).unwrap_or(0.5);
         let volume_label_text = wide(&format!(
             "\u{97F3}\u{91CF}: {}%",
@@ -620,10 +622,7 @@ fn create_controls(hwnd: isize) {
             w!("STATIC"),
             PCWSTR(volume_label_text.as_ptr()),
             WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            label_w,
-            row_h,
+            margin, y, label_w, row_h,  // x=22, y=124, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(2 as *mut _)),
             Some(instance.into()),
@@ -639,10 +638,7 @@ fn create_controls(hwnd: isize) {
             w!("msctls_trackbar32"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(TBS_HORZ | TBS_AUTOTICKS),
-            ctrl_x,
-            y + 2,
-            ctrl_w,
-            row_h - 4,
+            ctrl_x, y + 2, ctrl_w, row_h - 4,  // x=140, y=126, 宽=286, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(3 as *mut _)),
             Some(instance.into()),
@@ -669,9 +665,10 @@ fn create_controls(hwnd: isize) {
             log::info!("Volume slider created with {}%", slider_pos);
         }
 
-        y += row_h + 12;
+        y += row_h + 12;  // 音量行高度 + 间距（比其他行小一点）
 
-        // === 音调 ===
+        // --- 音调 标签 + 滑块 ---
+        // y=164
         let current_pitch = crate::config::get_config().map(|c| c.pitch).unwrap_or(1.0);
         let pitch_label_text = wide(&format!("\u{97F3}\u{8C03}: {:.1}", current_pitch));
         let _pitch_label = CreateWindowExW(
@@ -679,10 +676,7 @@ fn create_controls(hwnd: isize) {
             w!("STATIC"),
             PCWSTR(pitch_label_text.as_ptr()),
             WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            label_w,
-            row_h,
+            margin, y, label_w, row_h,  // x=22, y=164, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(4 as *mut _)),
             Some(instance.into()),
@@ -698,10 +692,7 @@ fn create_controls(hwnd: isize) {
             w!("msctls_trackbar32"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(TBS_HORZ | TBS_AUTOTICKS),
-            ctrl_x,
-            y + 2,
-            ctrl_w,
-            row_h - 4,
+            ctrl_x, y + 2, ctrl_w, row_h - 4,  // x=140, y=166, 宽=286, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(5 as *mut _)),
             Some(instance.into()),
@@ -728,18 +719,17 @@ fn create_controls(hwnd: isize) {
             log::info!("Pitch slider created with {:.1}", current_pitch);
         }
 
-        y += row_h + 16;
+        y += row_h + 40;  // 音调行高度 + 间距
 
+        // --- "播放性能" 分组框 ---
+        // y=208, 分组框边框在 y-16=192, 高度=80
         let playback_group_text = wide("\u{64AD}\u{653E}\u{6027}\u{80FD}");
         let playback_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             PCWSTR(playback_group_text.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
-            12,
-            y - 10,
-            436,
-            72,
+            group_x, y - 30, group_w, 70,  // 居中, y偏移, 宽, 高
             Some(parent),
             Some(HMENU(104 as *mut _)),
             Some(instance.into()),
@@ -747,16 +737,14 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&playback_group, ui_font);
 
-        // === 同时播放数 ===
+        // --- 同时播放数 标签 + 输入框 + 箭头 ---
+        // y=208
         let _max_sources_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{540C}\u{65F6}\u{64AD}\u{653E}\u{6570}"),
             WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            label_w,
-            row_h,
+            margin, y, label_w, row_h,  // x=22, y=208, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(6 as *mut _)),
             Some(instance.into()),
@@ -771,10 +759,7 @@ fn create_controls(hwnd: isize) {
             w!("EDIT"),
             None,
             WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL | ES_NUMBER),
-            ctrl_x,
-            y + 2,
-            60,
-            row_h - 4,
+            ctrl_x, y + 2, 60, row_h - 4,  // x=140, y=210, 宽=60, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(7 as *mut _)),
             Some(instance.into()),
@@ -793,10 +778,7 @@ fn create_controls(hwnd: isize) {
                 w!("msctls_updown32"),
                 None,
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(UDS_ARROWKEYS | UDS_NOTHOUSANDS),
-                ctrl_x + 60,
-                y + 2,
-                20,
-                row_h - 4,
+                ctrl_x + 60, y + 2, 20, row_h - 4,  // x=200, y=210, 宽=20, 高=24
                 Some(HWND(hwnd as *mut _)),
                 Some(HMENU(16 as *mut _)),
                 Some(instance.into()),
@@ -833,12 +815,14 @@ fn create_controls(hwnd: isize) {
             );
         }
 
+        // --- 同时播放数 提示文本 ---
+        // x=232, y=210
         let max_sources_hint = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{4E0A}\u{7BAD}\u{5934}\u{589E}\u{52A0}\u{FF0C}\u{4E0B}\u{7BAD}\u{5934}\u{51CF}\u{5C11}\u{FF0C}\u{8303}\u{56F4} 2-20"),
             WS_CHILD | WS_VISIBLE,
-            ctrl_x + 92, y + 2, 220, row_h - 4,
+            ctrl_x + 92, y + 2, 200, row_h - 4,  // x=232, y=210, 宽=220, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(105 as *mut _)),
             Some(instance.into()),
@@ -846,18 +830,17 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&max_sources_hint, ui_font);
 
-        y += row_h + 16;
+        y += row_h + 40;  // 同时播放数行高度 + 间距
 
+        // --- "排除按键" 分组框 ---
+        // y=252, 分组框边框在 y-52=200, 高度=276
         let blocked_group_text = wide("\u{6392}\u{9664}\u{6309}\u{952E}");
         let blocked_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             PCWSTR(blocked_group_text.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
-            12,
-            y - 10,
-            436,
-            220,
+            group_x, y - 22, group_w, 210,  // 居中, y偏移, 宽, 高
             Some(parent),
             Some(HMENU(106 as *mut _)),
             Some(instance.into()),
@@ -865,16 +848,14 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&blocked_group, ui_font);
 
-        // === 排除按键 ===
+        // --- 排除按键 标签 + 按钮 ---
+        // y=252
         let _blocked_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{6392}\u{9664}\u{6309}\u{952E}"),
             WS_CHILD | WS_VISIBLE,
-            margin,
-            y,
-            label_w,
-            row_h,
+            margin, y, label_w, row_h,  // x=22, y=252, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(8 as *mut _)),
             Some(instance.into()),
@@ -887,10 +868,7 @@ fn create_controls(hwnd: isize) {
             w!("BUTTON"),
             w!("\u{6DFB}\u{52A0}\u{6309}\u{952E}"),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
-            ctrl_x,
-            y,
-            100,
-            row_h,
+            ctrl_x, y, 100, row_h,  // x=140, y=252, 宽=100, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(19 as *mut _)),
             Some(instance.into()),
@@ -907,10 +885,7 @@ fn create_controls(hwnd: isize) {
             w!("BUTTON"),
             w!("\u{79FB}\u{9664}\u{6309}\u{952E}"),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
-            ctrl_x + 110,
-            y,
-            100,
-            row_h,
+            ctrl_x + 110, y, 100, row_h,  // x=250, y=252, 宽=100, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(20 as *mut _)),
             Some(instance.into()),
@@ -918,18 +893,16 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&_remove_blocked_btn, ui_font);
 
-        y += row_h + 8;
+        y += row_h + 8;  // 按钮行高度 + 间距
 
-        // ListView for blocked keys
+        // --- ListView（排除按键列表）---
+        // y=288
         let blocked_listview_hwnd = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             w!("SysListView32"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0001 | 0x0002), // LVS_REPORT | LVS_SHOWSELALWAYS
-            margin,
-            y,
-            404,
-            140,
+            margin, y, 404, 140,  // x=22, y=288, 宽=404, 高=140
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(18 as *mut _)),
             Some(instance.into()),
@@ -990,57 +963,7 @@ fn create_controls(hwnd: isize) {
         }
 
         // Move y past the ListView
-        y += 140 + 8;
-
-        // Version label at bottom
-        let version_text = format!("v{}", crate::consts::CURRENT_VERSION);
-        let version_utf16: Vec<u16> = version_text
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-
-        let _version_label = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR(version_utf16.as_ptr()),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000010),
-            margin,
-            y,
-            380,
-            20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(14 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-        apply_font_to(&_version_label, ui_font);
-
-        y += 24;
-
-        // Website link
-        let website_text = "\u{8BBF}\u{95EE}\u{5B98}\u{7F51}";
-        let website_utf16: Vec<u16> = website_text
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-
-        let _website_label = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR(website_utf16.as_ptr()),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000010 | 0x00000200),
-            margin,
-            y,
-            380,
-            20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(15 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-        apply_font_to(&_website_label, ui_font);
-
-        y += 30;
+        y += 210;
 
         // Adjust window size (add non-client area overhead for caption + borders)
         let _ = SetWindowPos(
@@ -1049,7 +972,7 @@ fn create_controls(hwnd: isize) {
             0,
             0,
             470,
-            y + 47,
+            y,
             SWP_NOMOVE | SWP_NOZORDER,
         );
     }
