@@ -151,6 +151,15 @@ fn main() {
 
     logging::init();
 
+    // Initialize common controls (up-down, list-view, trackbar) to prevent heap corruption
+    unsafe {
+        let mut icc = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_UPDOWN_CLASS | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES,
+        };
+        let _ = InitCommonControlsEx(&mut icc);
+    }
+
     if let Err(e) = audio::init() {
         log::error!("{e}");
     }
@@ -216,7 +225,8 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
+    match std::panic::catch_unwind(|| {
+        match msg {
         WM_KEYDOWN_HOOK => {
             let vk_code = wparam.0 as u16;
             // Check if we're capturing a key for the settings window
@@ -307,6 +317,29 @@ unsafe extern "system" fn wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+    }) {
+        Ok(result) => result,
+        Err(e) => {
+            log::error!("Panic in main wnd_proc(msg=0x{:X}): {:?}", msg, e);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+struct INITCOMMONCONTROLSEX {
+    dwSize: u32,
+    dwICC: u32,
+}
+
+const ICC_UPDOWN_CLASS: u32 = 0x00010000;
+const ICC_LISTVIEW_CLASSES: u32 = 0x00000001;
+const ICC_BAR_CLASSES: u32 = 0x00000004;
+
+#[link(name = "comctl32")]
+extern "system" {
+    fn InitCommonControlsEx(lpInitCtrls: *mut INITCOMMONCONTROLSEX) -> BOOL;
 }
 
 #[link(name = "shcore")]
