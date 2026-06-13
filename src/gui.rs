@@ -16,7 +16,6 @@ const VOLUME_SLIDER_MAX: i32 = 500;
 const PITCH_SLIDER_MIN: i32 = 50;
 const PITCH_SLIDER_MAX: i32 = 200;
 const UDM_SETRANGE32: u32 = 0x046E;
-const UDM_SETPOS32: u32 = 0x0470;
 const UDM_SETBUDDY: u32 = 0x0469;
 const EN_CHANGE: u32 = 0x0300;
 
@@ -469,13 +468,12 @@ fn create_controls(hwnd: isize) {
 
             if let Ok(spin_hwnd) = spin_hwnd {
                 let _ = SendMessageW(spin_hwnd, UDM_SETBUDDY, Some(WPARAM(max_sources_edit_hwnd.0 as usize)), Some(LPARAM(0)));
-                let _ = SendMessageW(spin_hwnd, UDM_SETRANGE32, Some(WPARAM(2)), Some(LPARAM(20)));
-                let _ = SendMessageW(spin_hwnd, UDM_SETPOS32, Some(WPARAM(1)), Some(LPARAM(current_max_sources as isize)));
+                let _ = SendMessageW(spin_hwnd, UDM_SETRANGE32, Some(WPARAM(20)), Some(LPARAM(2)));
             }
 
             *MAX_SOURCES_EDITING.lock().unwrap() = false;
 
-            log::info!("Max sources spin control created with range 2-20, value={}", current_max_sources);
+            log::info!("Max sources spin control created with range 2-20, edit_text={}", current_max_sources);
         }
 
         y += row_h + 16;
