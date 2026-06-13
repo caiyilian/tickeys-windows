@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -15,9 +16,17 @@ const VOLUME_SLIDER_MIN: i32 = 0;
 const VOLUME_SLIDER_MAX: i32 = 500;
 const PITCH_SLIDER_MIN: i32 = 50;
 const PITCH_SLIDER_MAX: i32 = 200;
-const UDM_SETRANGE32: u32 = 0x046E;
+const MAX_SOURCES_MIN: i32 = 2;
+const MAX_SOURCES_MAX: i32 = 20;
+const UDM_SETRANGE32: u32 = 0x046F;
+const UDM_SETPOS32: u32 = 0x0471;
 const UDM_SETBUDDY: u32 = 0x0469;
+const UDN_DELTAPOS: u32 = 0xFFFF_FD2E;
 const EN_CHANGE: u32 = 0x0300;
+const ES_AUTOHSCROLL: u32 = 0x0080;
+const ES_NUMBER: u32 = 0x2000;
+const UDS_ARROWKEYS: u32 = 0x0020;
+const UDS_NOTHOUSANDS: u32 = 0x0080;
 
 #[repr(C)]
 #[allow(non_snake_case)]
@@ -51,6 +60,22 @@ struct LVCITEMW {
     pub iGroupId: i32,
     pub cColumns: u32,
     pub puColumns: *mut u32,
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+struct NMHDR_LOCAL {
+    pub hwndFrom: HWND,
+    pub idFrom: usize,
+    pub code: u32,
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+struct NMUPDOWN_LOCAL {
+    pub hdr: NMHDR_LOCAL,
+    pub iPos: i32,
+    pub iDelta: i32,
 }
 
 #[repr(C)]
@@ -93,6 +118,171 @@ static BLOCKED_KEYS_LISTVIEW_HWND: Mutex<isize> = Mutex::new(0);
 pub static CAPTURING_KEY: Mutex<bool> = Mutex::new(false);
 pub static PENDING_KEY: Mutex<u16> = Mutex::new(0);
 static ADD_BUTTON_HWND: Mutex<isize> = Mutex::new(0);
+static UI_FONT: Mutex<isize> = Mutex::new(0);
+static UI_TITLE_FONT: Mutex<isize> = Mutex::new(0);
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+unsafe fn create_ui_font(height: i32, weight: i32) -> HFONT {
+    let face = wide("Segoe UI");
+    CreateFontW(
+        height,
+        0,
+        0,
+        0,
+        weight,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY,
+        (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+        PCWSTR(face.as_ptr()),
+    )
+}
+
+unsafe fn settings_font() -> HFONT {
+    let mut stored = UI_FONT.lock().unwrap();
+    if *stored == 0 {
+        *stored = create_ui_font(-14, FW_NORMAL.0 as i32).0 as isize;
+    }
+    HFONT(*stored as *mut _)
+}
+
+unsafe fn settings_title_font() -> HFONT {
+    let mut stored = UI_TITLE_FONT.lock().unwrap();
+    if *stored == 0 {
+        *stored = create_ui_font(-19, FW_SEMIBOLD.0 as i32).0 as isize;
+    }
+    HFONT(*stored as *mut _)
+}
+
+unsafe fn destroy_ui_fonts() {
+    let mut font = UI_FONT.lock().unwrap();
+    if *font != 0 {
+        let _ = DeleteObject(HGDIOBJ(*font as *mut _));
+        *font = 0;
+    }
+    let mut title_font = UI_TITLE_FONT.lock().unwrap();
+    if *title_font != 0 {
+        let _ = DeleteObject(HGDIOBJ(*title_font as *mut _));
+        *title_font = 0;
+    }
+}
+
+unsafe fn set_control_font(hwnd: HWND, font: HFONT) {
+    if !font.0.is_null() {
+        let _ = SendMessageW(
+            hwnd,
+            WM_SETFONT,
+            Some(WPARAM(font.0 as usize)),
+            Some(LPARAM(1)),
+        );
+    }
+}
+
+unsafe fn apply_font_to(control: &Result<HWND>, font: HFONT) {
+    if let Ok(hwnd) = control {
+        set_control_font(*hwnd, font);
+    }
+}
+
+fn clamp_max_sources(value: i32) -> usize {
+    value.clamp(MAX_SOURCES_MIN, MAX_SOURCES_MAX) as usize
+}
+
+fn config_max_sources() -> usize {
+    crate::config::get_config()
+        .map(|c| clamp_max_sources(c.max_sources as i32))
+        .unwrap_or(MAX_SOURCES_MIN as usize)
+}
+
+unsafe fn set_max_sources_text(edit_hwnd: isize, value: usize) {
+    let text = wide(&value.to_string());
+    let _ = SetWindowTextW(HWND(edit_hwnd as *mut _), PCWSTR(text.as_ptr()));
+}
+
+unsafe fn read_max_sources_text(edit_hwnd: isize) -> Option<usize> {
+    let mut text = [0u16; 16];
+    let len = GetWindowTextW(HWND(edit_hwnd as *mut _), &mut text);
+    if len <= 0 {
+        return None;
+    }
+    let text_str = String::from_utf16_lossy(&text[..len as usize]);
+    text_str.trim().parse::<i32>().ok().map(clamp_max_sources)
+}
+
+unsafe fn begin_max_sources_edit() -> bool {
+    let mut editing = MAX_SOURCES_EDITING.lock().unwrap();
+    if *editing {
+        return false;
+    }
+    *editing = true;
+    true
+}
+
+fn end_max_sources_edit() {
+    *MAX_SOURCES_EDITING.lock().unwrap() = false;
+}
+
+unsafe fn commit_max_sources(edit_hwnd: isize, value: usize) {
+    let previous = config_max_sources();
+    set_max_sources_text(edit_hwnd, value);
+    if value != previous {
+        crate::audio::rebuild_player(value);
+        if let Some(mut cfg) = crate::config::get_config() {
+            cfg.max_sources = value;
+            crate::config::update_config(&cfg);
+        }
+        log::info!("Max sources changed to {}", value);
+    }
+}
+
+unsafe fn handle_max_sources_edit_change() -> LRESULT {
+    let edit_hwnd = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
+    if edit_hwnd == 0 || !begin_max_sources_edit() {
+        return LRESULT::default();
+    }
+
+    if let Some(value) = read_max_sources_text(edit_hwnd) {
+        commit_max_sources(edit_hwnd, value);
+    }
+
+    end_max_sources_edit();
+    LRESULT::default()
+}
+
+unsafe fn handle_max_sources_spin_delta(lparam: LPARAM) -> Option<LRESULT> {
+    if lparam.0 == 0 {
+        return None;
+    }
+    let updown = &*(lparam.0 as *const NMUPDOWN_LOCAL);
+    if updown.hdr.code != UDN_DELTAPOS || updown.hdr.idFrom != 16 {
+        return None;
+    }
+
+    let edit_hwnd = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
+    if edit_hwnd == 0 || !begin_max_sources_edit() {
+        return Some(LRESULT(1));
+    }
+
+    let current = read_max_sources_text(edit_hwnd).unwrap_or_else(config_max_sources);
+    let next = clamp_max_sources(current as i32 + updown.iDelta);
+    commit_max_sources(edit_hwnd, next);
+    let _ = SendMessageW(
+        updown.hdr.hwndFrom,
+        UDM_SETPOS32,
+        Some(WPARAM(0)),
+        Some(LPARAM(next as isize)),
+    );
+
+    end_max_sources_edit();
+    Some(LRESULT(1))
+}
 
 fn vk_to_name(vk: u16) -> String {
     match vk {
@@ -186,8 +376,8 @@ impl SettingsWindow {
                 WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                400,
-                300,
+                470,
+                560,
                 None,
                 None,
                 Some(instance.into()),
@@ -265,12 +455,7 @@ fn make_trackbar_range(min: i32, max: i32) -> LPARAM {
     LPARAM(((min as u32 & 0xFFFF) | ((max as u32 & 0xFFFF) << 16)) as isize)
 }
 
-unsafe fn trackbar_scroll_position(
-    slider_hwnd: isize,
-    wparam: WPARAM,
-    min: i32,
-    max: i32,
-) -> i32 {
+unsafe fn trackbar_scroll_position(slider_hwnd: isize, wparam: WPARAM, min: i32, max: i32) -> i32 {
     let scroll_code = (wparam.0 & 0xFFFF) as u32;
     let position = match scroll_code {
         TB_THUMBPOSITION | TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
@@ -291,38 +476,104 @@ unsafe fn trackbar_scroll_position(
 fn create_controls(hwnd: isize) {
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
+        let parent = HWND(hwnd as *mut _);
+        let ui_font = settings_font();
+        let title_font = settings_title_font();
 
-        let margin = 20;
-        let label_w = 110;
-        let ctrl_x = margin + label_w + 10;
-        let ctrl_w = 260;
-        let row_h = 28;
-        let mut y = margin;
+        // ======== 布局参数，改这里调整位置 ========
+        let mut client_rect = RECT::default();
+        let _ = GetClientRect(parent, &mut client_rect);
+        let client_w = (client_rect.right - client_rect.left) as i32;
 
-        // === 音效方案 ===
+        let group_w = 436;      // 分组框宽度
+        let group_x = (client_w - group_w) / 2;  // 分组框居中 x
+
+        let margin = 22;        // 左边距
+        let label_w = 104;      // 标签宽度
+        let ctrl_x = margin + label_w + 14;  // 控件起始 x（标签右侧）
+        let ctrl_w = 286;       // 控件宽度
+        let row_h = 28;         // 每行高度
+        let mut y = 16;         // 当前 y 坐标（从顶部开始）
+        // ==========================================
+
+        // --- 标题 "Tickeys 设置" ---
+        // y=16, 高度=26
+        let title_text = wide("Tickeys \u{8BBE}\u{7F6E}");
+        let title_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(title_text.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001),  // SS_CENTER
+            margin, y, 416, 26,  // x, y, 宽, 高
+            Some(parent),
+            Some(HMENU(101 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&title_label, title_font);
+
+        // --- 副标题 "调整键盘音效、播放性能和排除按键" ---
+        y += 28;  // 标题高度 + 间距
+        // y=44, 高度=20
+        let subtitle_text = wide("\u{8C03}\u{6574}\u{952E}\u{76D8}\u{97F3}\u{6548}\u{3001}\u{64AD}\u{653E}\u{6027}\u{80FD}\u{548C}\u{6392}\u{9664}\u{6309}\u{952E}");
+        let subtitle_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(subtitle_text.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001),
+            margin, y, 416, 20,  // x, y, 宽, 高
+            Some(parent),
+            Some(HMENU(102 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&subtitle_label, ui_font);
+
+        y += 50;  // 副标题高度 + 间距
+
+        // --- "音效" 分组框 ---
+        // y=80, 分组框边框在 y-12=68, 高度=132
+        let audio_group_text = wide("\u{97F3}\u{6548}");
+        let audio_group = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            PCWSTR(audio_group_text.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+            group_x, y - 20, group_w, 140,  // 居中, y偏移, 宽, 高
+            Some(parent),
+            Some(HMENU(103 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&audio_group, ui_font);
+
+        // --- 音效方案 标签 + 下拉框 ---
+        // y=80
         let _scheme_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{97F3}\u{6548}\u{65B9}\u{6848}"),
             WS_CHILD | WS_VISIBLE,
-            margin, y, label_w, row_h,
+            margin, y, label_w, row_h,  // x=22, y=80, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(100 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&_scheme_label, ui_font);
 
         let combo_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("COMBOBOX"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-            ctrl_x, y, ctrl_w, 200,
+            ctrl_x, y, ctrl_w, 200,  // x=140, y=80, 宽=286, 下拉高度=200
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(1 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&combo_hwnd, ui_font);
 
         if let Ok(combo_hwnd) = combo_hwnd {
             *COMBOBOX_HWND.lock().unwrap() = combo_hwnd.0 as isize;
@@ -332,176 +583,298 @@ fn create_controls(hwnd: isize) {
                 .unwrap_or_default();
             let mut selected_index: Option<i32> = None;
             for (index, scheme) in schemes.iter().enumerate() {
-                let display_name: Vec<u16> = scheme.display_name.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = SendMessageW(combo_hwnd, CB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(display_name.as_ptr() as isize)));
+                let display_name: Vec<u16> = scheme
+                    .display_name
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let _ = SendMessageW(
+                    combo_hwnd,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(display_name.as_ptr() as isize)),
+                );
                 if scheme.name == current_scheme {
                     selected_index = Some(index as i32);
                 }
             }
             if let Some(index) = selected_index {
-                let _ = SendMessageW(combo_hwnd, CB_SETCURSEL, Some(WPARAM(index as usize)), Some(LPARAM(0)));
+                let _ = SendMessageW(
+                    combo_hwnd,
+                    CB_SETCURSEL,
+                    Some(WPARAM(index as usize)),
+                    Some(LPARAM(0)),
+                );
             }
         }
 
-        y += row_h + 16;
+        y += row_h + 16;  // 音效方案行高度 + 间距
 
-        // === 音量 ===
+        // --- 音量 标签 + 滑块 ---
+        // y=124
+        let current_volume = crate::config::get_config().map(|c| c.volume).unwrap_or(0.5);
+        let volume_label_text = wide(&format!(
+            "\u{97F3}\u{91CF}: {}%",
+            (current_volume * 100.0).round() as i32
+        ));
         let _volume_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!("\u{97F3}\u{91CF}"),
+            PCWSTR(volume_label_text.as_ptr()),
             WS_CHILD | WS_VISIBLE,
-            margin, y, label_w, row_h,
+            margin, y, label_w, row_h,  // x=22, y=124, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(2 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&_volume_label, ui_font);
+        if let Ok(label_hwnd) = _volume_label {
+            *VOLUME_LABEL_HWND.lock().unwrap() = label_hwnd.0 as isize;
+        }
 
         let volume_slider_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("msctls_trackbar32"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(TBS_HORZ | TBS_AUTOTICKS),
-            ctrl_x, y + 2, ctrl_w, row_h - 4,
+            ctrl_x, y + 2, ctrl_w, row_h - 4,  // x=140, y=126, 宽=286, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(3 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&volume_slider_hwnd, ui_font);
 
         if let Ok(volume_slider_hwnd) = volume_slider_hwnd {
             *VOLUME_SLIDER_HWND.lock().unwrap() = volume_slider_hwnd.0 as isize;
-            let current_volume = crate::config::get_config().map(|c| c.volume).unwrap_or(0.5);
-            let slider_pos = ((current_volume * 100.0).round() as i32).clamp(VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX);
-            let _ = SendMessageW(volume_slider_hwnd, TBM_SETRANGE, Some(WPARAM(1)), Some(make_trackbar_range(VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX)));
-            let _ = SendMessageW(volume_slider_hwnd, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(slider_pos as isize)));
+            let slider_pos = ((current_volume * 100.0).round() as i32)
+                .clamp(VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX);
+            let _ = SendMessageW(
+                volume_slider_hwnd,
+                TBM_SETRANGE,
+                Some(WPARAM(1)),
+                Some(make_trackbar_range(VOLUME_SLIDER_MIN, VOLUME_SLIDER_MAX)),
+            );
+            let _ = SendMessageW(
+                volume_slider_hwnd,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(slider_pos as isize)),
+            );
             log::info!("Volume slider created with {}%", slider_pos);
         }
 
-        y += row_h + 12;
+        y += row_h + 12;  // 音量行高度 + 间距（比其他行小一点）
 
-        // === 音调 ===
+        // --- 音调 标签 + 滑块 ---
+        // y=164
+        let current_pitch = crate::config::get_config().map(|c| c.pitch).unwrap_or(1.0);
+        let pitch_label_text = wide(&format!("\u{97F3}\u{8C03}: {:.1}", current_pitch));
         let _pitch_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!("\u{97F3}\u{8C03}"),
+            PCWSTR(pitch_label_text.as_ptr()),
             WS_CHILD | WS_VISIBLE,
-            margin, y, label_w, row_h,
+            margin, y, label_w, row_h,  // x=22, y=164, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(4 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&_pitch_label, ui_font);
+        if let Ok(label_hwnd) = _pitch_label {
+            *PITCH_LABEL_HWND.lock().unwrap() = label_hwnd.0 as isize;
+        }
 
         let pitch_slider_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("msctls_trackbar32"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(TBS_HORZ | TBS_AUTOTICKS),
-            ctrl_x, y + 2, ctrl_w, row_h - 4,
+            ctrl_x, y + 2, ctrl_w, row_h - 4,  // x=140, y=166, 宽=286, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(5 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&pitch_slider_hwnd, ui_font);
 
         if let Ok(pitch_slider_hwnd) = pitch_slider_hwnd {
             *PITCH_SLIDER_HWND.lock().unwrap() = pitch_slider_hwnd.0 as isize;
-            let current_pitch = crate::config::get_config().map(|c| c.pitch).unwrap_or(1.0);
-            let slider_pos = ((current_pitch * 100.0).round() as i32).clamp(PITCH_SLIDER_MIN, PITCH_SLIDER_MAX);
-            let _ = SendMessageW(pitch_slider_hwnd, TBM_SETRANGE, Some(WPARAM(1)), Some(make_trackbar_range(PITCH_SLIDER_MIN, PITCH_SLIDER_MAX)));
-            let _ = SendMessageW(pitch_slider_hwnd, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(slider_pos as isize)));
+            let slider_pos =
+                ((current_pitch * 100.0).round() as i32).clamp(PITCH_SLIDER_MIN, PITCH_SLIDER_MAX);
+            let _ = SendMessageW(
+                pitch_slider_hwnd,
+                TBM_SETRANGE,
+                Some(WPARAM(1)),
+                Some(make_trackbar_range(PITCH_SLIDER_MIN, PITCH_SLIDER_MAX)),
+            );
+            let _ = SendMessageW(
+                pitch_slider_hwnd,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(slider_pos as isize)),
+            );
             log::info!("Pitch slider created with {:.1}", current_pitch);
         }
 
-        y += row_h + 16;
+        y += row_h + 40;  // 音调行高度 + 间距
 
-        // === 同时播放数 ===
+        // --- "播放性能" 分组框 ---
+        // y=208, 分组框边框在 y-16=192, 高度=80
+        let playback_group_text = wide("\u{64AD}\u{653E}\u{6027}\u{80FD}");
+        let playback_group = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            PCWSTR(playback_group_text.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+            group_x, y - 30, group_w, 70,  // 居中, y偏移, 宽, 高
+            Some(parent),
+            Some(HMENU(104 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&playback_group, ui_font);
+
+        // --- 同时播放数 标签 + 输入框 + 箭头 ---
+        // y=208
         let _max_sources_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{540C}\u{65F6}\u{64AD}\u{653E}\u{6570}"),
             WS_CHILD | WS_VISIBLE,
-            margin, y, label_w, row_h,
+            margin, y, label_w, row_h,  // x=22, y=208, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(6 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&_max_sources_label, ui_font);
 
-        let current_max_sources = crate::config::get_config().map(|c| c.max_sources).unwrap_or(2);
+        let current_max_sources = config_max_sources();
 
         let max_sources_edit_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
             None,
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(0x0080), // ES_AUTOHSCROLL
-            ctrl_x, y + 2, 60, row_h - 4,
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL | ES_NUMBER),
+            ctrl_x, y + 2, 60, row_h - 4,  // x=140, y=210, 宽=60, 高=24
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(7 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&max_sources_edit_hwnd, ui_font);
 
         if let Ok(max_sources_edit_hwnd) = max_sources_edit_hwnd {
             *MAX_SOURCES_COMBO_HWND.lock().unwrap() = max_sources_edit_hwnd.0 as isize;
 
-            // Suppress EN_CHANGE during initialization to prevent re-entrant rebuild_player/update_config
             *MAX_SOURCES_EDITING.lock().unwrap() = true;
-
-            let init_text = format!("{}", current_max_sources);
-            let init_utf16: Vec<u16> = init_text.encode_utf16().chain(std::iter::once(0)).collect();
-            let _ = SetWindowTextW(max_sources_edit_hwnd, PCWSTR(init_utf16.as_ptr()));
+            set_max_sources_text(max_sources_edit_hwnd.0 as isize, current_max_sources);
 
             let spin_hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 w!("msctls_updown32"),
                 None,
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0002), // UDS_SETBUDDYINT
-                ctrl_x + 60, y + 2, 20, row_h - 4,
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(UDS_ARROWKEYS | UDS_NOTHOUSANDS),
+                ctrl_x + 60, y + 2, 20, row_h - 4,  // x=200, y=210, 宽=20, 高=24
                 Some(HWND(hwnd as *mut _)),
                 Some(HMENU(16 as *mut _)),
                 Some(instance.into()),
                 None,
             );
+            apply_font_to(&spin_hwnd, ui_font);
 
             if let Ok(spin_hwnd) = spin_hwnd {
-                let _ = SendMessageW(spin_hwnd, UDM_SETBUDDY, Some(WPARAM(max_sources_edit_hwnd.0 as usize)), Some(LPARAM(0)));
-                let _ = SendMessageW(spin_hwnd, UDM_SETRANGE32, Some(WPARAM(2)), Some(LPARAM(20)));
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETBUDDY,
+                    Some(WPARAM(max_sources_edit_hwnd.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETRANGE32,
+                    Some(WPARAM(MAX_SOURCES_MIN as usize)),
+                    Some(LPARAM(MAX_SOURCES_MAX as isize)),
+                );
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETPOS32,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(current_max_sources as isize)),
+                );
             }
 
             *MAX_SOURCES_EDITING.lock().unwrap() = false;
 
-            log::info!("Max sources spin control created with range 2-20, edit_text={}", current_max_sources);
+            log::info!(
+                "Max sources spin control created with range 2-20, edit_text={}",
+                current_max_sources
+            );
         }
 
-        y += row_h + 16;
+        // --- 同时播放数 提示文本 ---
+        // x=232, y=210
+        let max_sources_hint = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("\u{4E0A}\u{7BAD}\u{5934}\u{589E}\u{52A0}\u{FF0C}\u{4E0B}\u{7BAD}\u{5934}\u{51CF}\u{5C11}\u{FF0C}\u{8303}\u{56F4} 2-20"),
+            WS_CHILD | WS_VISIBLE,
+            ctrl_x + 92, y + 2, 200, row_h - 4,  // x=232, y=210, 宽=220, 高=24
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(105 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&max_sources_hint, ui_font);
 
-        // === 排除按键 ===
+        y += row_h + 40;  // 同时播放数行高度 + 间距
+
+        // --- "排除按键" 分组框 ---
+        // y=252, 分组框边框在 y-52=200, 高度=276
+        let blocked_group_text = wide("\u{6392}\u{9664}\u{6309}\u{952E}");
+        let blocked_group = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            PCWSTR(blocked_group_text.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+            group_x, y - 22, group_w, 210,  // 居中, y偏移, 宽, 高
+            Some(parent),
+            Some(HMENU(106 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&blocked_group, ui_font);
+
+        // --- 排除按键 标签 + 按钮 ---
+        // y=252
         let _blocked_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("\u{6392}\u{9664}\u{6309}\u{952E}"),
             WS_CHILD | WS_VISIBLE,
-            margin, y, label_w, row_h,
+            margin, y, label_w, row_h,  // x=22, y=252, 宽=104, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(8 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&_blocked_label, ui_font);
 
         let add_blocked_btn = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             w!("\u{6DFB}\u{52A0}\u{6309}\u{952E}"),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
-            ctrl_x, y, 100, row_h,
+            ctrl_x, y, 100, row_h,  // x=140, y=252, 宽=100, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(19 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&add_blocked_btn, ui_font);
 
         if let Ok(btn_hwnd) = add_blocked_btn {
             *ADD_BUTTON_HWND.lock().unwrap() = btn_hwnd.0 as isize;
@@ -512,37 +885,43 @@ fn create_controls(hwnd: isize) {
             w!("BUTTON"),
             w!("\u{79FB}\u{9664}\u{6309}\u{952E}"),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000001), // BS_PUSHBUTTON
-            ctrl_x + 110, y, 100, row_h,
+            ctrl_x + 110, y, 100, row_h,  // x=250, y=252, 宽=100, 高=28
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(20 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&_remove_blocked_btn, ui_font);
 
-        y += row_h + 8;
+        y += row_h + 8;  // 按钮行高度 + 间距
 
-        // ListView for blocked keys
+        // --- ListView（排除按键列表）---
+        // y=288
         let blocked_listview_hwnd = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             w!("SysListView32"),
             None,
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0001 | 0x0002), // LVS_REPORT | LVS_SHOWSELALWAYS
-            margin, y, 380, 140,
+            margin, y, 404, 140,  // x=22, y=288, 宽=404, 高=140
             Some(HWND(hwnd as *mut _)),
             Some(HMENU(18 as *mut _)),
             Some(instance.into()),
             None,
         );
+        apply_font_to(&blocked_listview_hwnd, ui_font);
 
         if let Ok(listview_hwnd) = blocked_listview_hwnd {
             *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = listview_hwnd.0 as isize;
 
             let column_text = "\u{6309}\u{952E}";
-            let column_text_utf16: Vec<u16> = column_text.encode_utf16().chain(std::iter::once(0)).collect();
+            let column_text_utf16: Vec<u16> = column_text
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let mut column = LVCOLUMNW {
                 mask: 0x0001,
                 pszText: column_text_utf16.as_ptr(),
-                cx: 360,
+                cx: 382,
                 ..std::mem::zeroed()
             };
             let _ = SendMessageW(
@@ -553,11 +932,16 @@ fn create_controls(hwnd: isize) {
             );
 
             let current_config = crate::config::get_config();
-            let blocked_keys = current_config.as_ref().map(|c| &c.blocked_keys).cloned().unwrap_or_default();
+            let blocked_keys = current_config
+                .as_ref()
+                .map(|c| &c.blocked_keys)
+                .cloned()
+                .unwrap_or_default();
 
             for (index, &vk_code) in blocked_keys.iter().enumerate() {
                 let key_name = vk_to_name(vk_code);
-                let key_utf16: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
+                let key_utf16: Vec<u16> =
+                    key_name.encode_utf16().chain(std::iter::once(0)).collect();
                 let mut item = LVCITEMW {
                     mask: 0x0001,
                     iItem: index as i32,
@@ -572,54 +956,23 @@ fn create_controls(hwnd: isize) {
                 );
             }
 
-            log::info!("Blocked keys ListView created with {} items", blocked_keys.len());
+            log::info!(
+                "Blocked keys ListView created with {} items",
+                blocked_keys.len()
+            );
         }
 
         // Move y past the ListView
-        y += 140 + 8;
-
-        // Version label at bottom
-        let version_text = format!("v{}", crate::consts::CURRENT_VERSION);
-        let version_utf16: Vec<u16> = version_text.encode_utf16().chain(std::iter::once(0)).collect();
-
-        let _version_label = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR(version_utf16.as_ptr()),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000010),
-            margin, y, 380, 20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(14 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-
-        y += 24;
-
-        // Website link
-        let website_text = "\u{8BBF}\u{95EE}\u{5B98}\u{7F51}";
-        let website_utf16: Vec<u16> = website_text.encode_utf16().chain(std::iter::once(0)).collect();
-
-        let _website_label = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR(website_utf16.as_ptr()),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00000010 | 0x00000200),
-            margin, y, 380, 20,
-            Some(HWND(hwnd as *mut _)),
-            Some(HMENU(15 as *mut _)),
-            Some(instance.into()),
-            None,
-        );
-
-        y += 30;
+        y += 210;
 
         // Adjust window size (add non-client area overhead for caption + borders)
         let _ = SetWindowPos(
             HWND(hwnd as *mut _),
             None,
-            0, 0, 440,
-            y + 47,
+            0,
+            0,
+            470,
+            y,
             SWP_NOMOVE | SWP_NOZORDER,
         );
     }
@@ -638,309 +991,289 @@ unsafe extern "system" fn settings_wnd_proc(
                 let code = (wparam.0 >> 16) & 0xFFFF;
                 let id = wparam.0 & 0xFFFF;
 
-                if id == 1 && code == 1 { // CBN_SELCHANGE for scheme selector
-                let combo_hwnd = *COMBOBOX_HWND.lock().unwrap();
-                if combo_hwnd != 0 {
-                    let index = SendMessageW(
-                        HWND(combo_hwnd as *mut _),
-                        CB_GETCURSEL,
-                        Some(WPARAM(0)),
-                        Some(LPARAM(0)),
-                    );
+                if id == 1 && code == 1 {
+                    // CBN_SELCHANGE for scheme selector
+                    let combo_hwnd = *COMBOBOX_HWND.lock().unwrap();
+                    if combo_hwnd != 0 {
+                        let index = SendMessageW(
+                            HWND(combo_hwnd as *mut _),
+                            CB_GETCURSEL,
+                            Some(WPARAM(0)),
+                            Some(LPARAM(0)),
+                        );
 
-                    if index.0 != -1 {
-                        let schemes = crate::schemes::load_schemes();
-                        if let Some(scheme) = schemes.get(index.0 as usize) {
-                            crate::switch_scheme(&scheme.name);
-                            log::info!("Switched to scheme: {}", scheme.name);
+                        if index.0 != -1 {
+                            let schemes = crate::schemes::load_schemes();
+                            if let Some(scheme) = schemes.get(index.0 as usize) {
+                                crate::switch_scheme(&scheme.name);
+                                log::info!("Switched to scheme: {}", scheme.name);
+                            }
                         }
                     }
-                }
-            } else if id == 7 && code == EN_CHANGE as usize { // EN_CHANGE for max sources Edit
-                let max_sources_edit = *MAX_SOURCES_COMBO_HWND.lock().unwrap();
-                if max_sources_edit != 0 {
-                    // Guard against re-entrancy from SetWindowTextW
-                    let mut editing = MAX_SOURCES_EDITING.lock().unwrap();
-                    if *editing {
-                        return LRESULT::default();
-                    }
-                    *editing = true;
-                    drop(editing);
+                } else if id == 7 && code == EN_CHANGE as usize {
+                    // EN_CHANGE for max sources Edit
+                    return handle_max_sources_edit_change();
+                } else if id == 19 && code == 0 {
+                    // Add blocked key button
+                    let pending = *PENDING_KEY.lock().unwrap();
+                    let capturing = *CAPTURING_KEY.lock().unwrap();
 
-                    let mut text = [0u16; 16];
-                    let len = GetWindowTextW(HWND(max_sources_edit as *mut _), &mut text);
-                    if len > 0 {
-                        let text_str = String::from_utf16_lossy(&text[..len as usize]);
-                        log::info!("Max sources EN_CHANGE: text='{}'", text_str);
-                        match text_str.parse::<i32>() {
-                            Ok(val) => {
-                                let clamped = val.clamp(2, 20) as usize;
-                                let clean = format!("{}", clamped);
-                                let clean_utf16: Vec<u16> = clean.encode_utf16().chain(std::iter::once(0)).collect();
-                                let _ = SetWindowTextW(
-                                    HWND(max_sources_edit as *mut _),
-                                    PCWSTR(clean_utf16.as_ptr()),
-                                );
-                                crate::audio::rebuild_player(clamped);
-                                if let Some(mut cfg) = crate::config::get_config() {
-                                    cfg.max_sources = clamped;
-                                    crate::config::update_config(&cfg);
+                    if pending != 0 && !capturing {
+                        // Confirm and add the captured key
+                        if let Some(mut cfg) = crate::config::get_config() {
+                            if !cfg.blocked_keys.contains(&pending) {
+                                cfg.blocked_keys.push(pending);
+                                cfg.blocked_keys.sort();
+                                cfg.blocked_keys.dedup();
+                                crate::config::update_config(&cfg);
+
+                                // Update ListView
+                                let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
+                                if listview_hwnd != 0 {
+                                    let key_name = vk_to_name(pending);
+                                    let key_utf16: Vec<u16> =
+                                        key_name.encode_utf16().chain(std::iter::once(0)).collect();
+                                    let mut item = LVCITEMW {
+                                        mask: 0x0001,
+                                        iItem: cfg.blocked_keys.len() as i32 - 1,
+                                        pszText: key_utf16.as_ptr() as *mut _,
+                                        ..std::mem::zeroed()
+                                    };
+                                    let _ = SendMessageW(
+                                        HWND(listview_hwnd as *mut _),
+                                        0x104D, // LVM_INSERTITEMW
+                                        Some(WPARAM(0)),
+                                        Some(LPARAM(&mut item as *mut _ as isize)),
+                                    );
                                 }
-                                log::info!("Max sources changed to {}", clamped);
-                            }
-                            Err(_) => {
-                                let current = crate::config::get_config()
-                                    .map(|c| c.max_sources)
-                                    .unwrap_or(2);
-                                let revert = format!("{}", current);
-                                let revert_utf16: Vec<u16> = revert.encode_utf16().chain(std::iter::once(0)).collect();
-                                let _ = SetWindowTextW(
-                                    HWND(max_sources_edit as *mut _),
-                                    PCWSTR(revert_utf16.as_ptr()),
+
+                                log::info!(
+                                    "Added blocked key: {} (0x{:02X})",
+                                    vk_to_name(pending),
+                                    pending
                                 );
                             }
                         }
-                    }
+                        *PENDING_KEY.lock().unwrap() = 0;
 
-                    *MAX_SOURCES_EDITING.lock().unwrap() = false;
-                }
-            } else if id == 19 && code == 0 { // Add blocked key button
-                let pending = *PENDING_KEY.lock().unwrap();
-                let capturing = *CAPTURING_KEY.lock().unwrap();
-
-                if pending != 0 && !capturing {
-                    // Confirm and add the captured key
-                    if let Some(mut cfg) = crate::config::get_config() {
-                        if !cfg.blocked_keys.contains(&pending) {
-                            cfg.blocked_keys.push(pending);
-                            cfg.blocked_keys.sort();
-                            cfg.blocked_keys.dedup();
-                            crate::config::update_config(&cfg);
-
-                            // Update ListView
-                            let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
-                            if listview_hwnd != 0 {
-                                let key_name = vk_to_name(pending);
-                                let key_utf16: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
-                                let mut item = LVCITEMW {
-                                    mask: 0x0001,
-                                    iItem: cfg.blocked_keys.len() as i32 - 1,
-                                    pszText: key_utf16.as_ptr() as *mut _,
-                                    ..std::mem::zeroed()
-                                };
-                                let _ = SendMessageW(
-                                    HWND(listview_hwnd as *mut _),
-                                    0x104D, // LVM_INSERTITEMW
-                                    Some(WPARAM(0)),
-                                    Some(LPARAM(&mut item as *mut _ as isize)),
-                                );
-                            }
-
-                            log::info!("Added blocked key: {} (0x{:02X})", vk_to_name(pending), pending);
-                        }
-                    }
-                    *PENDING_KEY.lock().unwrap() = 0;
-
-                    // Reset button text
-                    *CAPTURING_KEY.lock().unwrap() = false;
-                    let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
-                    if btn_hwnd != 0 {
-                        let text = "\u{6DFB}\u{52A0}\u{6309}\u{952E}";
-                        let text_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-                        let _ = SetWindowTextW(
-                            HWND(btn_hwnd as *mut _),
-                            PCWSTR(text_utf16.as_ptr()),
-                        );
-                    }
-                } else if !capturing {
-                    // Start capturing
-                    *CAPTURING_KEY.lock().unwrap() = true;
-                    let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
-                    if btn_hwnd != 0 {
-                        let text = "\u{6309}\u{4E0B}\u{4EFB}\u{610F}\u{952E}...";
-                        let text_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-                        let _ = SetWindowTextW(
-                            HWND(btn_hwnd as *mut _),
-                            PCWSTR(text_utf16.as_ptr()),
-                        );
-                    }
-                    log::info!("Key capture started");
-                }
-            } else if id == 20 && code == 0 { // Remove blocked key button
-                let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
-                if listview_hwnd != 0 {
-                    let mut selected_indices = Vec::new();
-                    let mut index = -1;
-
-                    loop {
-                        index = SendMessageW(
-                            HWND(listview_hwnd as *mut _),
-                            0x100C, // LVM_GETNEXTITEM
-                            Some(WPARAM(index as usize)),
-                            Some(LPARAM(0x0002)), // LVNI_SELECTED
-                        ).0 as i32;
-
-                        if index == -1 {
-                            break;
-                        }
-                        selected_indices.push(index);
-                    }
-
-                    if !selected_indices.is_empty() {
-                        // Remove from ListView (reverse order)
-                        for &idx in selected_indices.iter().rev() {
-                            let _ = SendMessageW(
-                                HWND(listview_hwnd as *mut _),
-                                0x1008, // LVM_DELETEITEM
-                                Some(WPARAM(idx as usize)),
-                                Some(LPARAM(0)),
+                        // Reset button text
+                        *CAPTURING_KEY.lock().unwrap() = false;
+                        let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+                        if btn_hwnd != 0 {
+                            let text = "\u{6DFB}\u{52A0}\u{6309}\u{952E}";
+                            let text_utf16: Vec<u16> =
+                                text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let _ = SetWindowTextW(
+                                HWND(btn_hwnd as *mut _),
+                                PCWSTR(text_utf16.as_ptr()),
                             );
                         }
+                    } else if !capturing {
+                        // Start capturing
+                        *CAPTURING_KEY.lock().unwrap() = true;
+                        let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+                        if btn_hwnd != 0 {
+                            let text = "\u{6309}\u{4E0B}\u{4EFB}\u{610F}\u{952E}...";
+                            let text_utf16: Vec<u16> =
+                                text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let _ = SetWindowTextW(
+                                HWND(btn_hwnd as *mut _),
+                                PCWSTR(text_utf16.as_ptr()),
+                            );
+                        }
+                        log::info!("Key capture started");
+                    }
+                } else if id == 20 && code == 0 {
+                    // Remove blocked key button
+                    let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
+                    if listview_hwnd != 0 {
+                        let mut selected_indices = Vec::new();
+                        let mut index = -1;
 
-                        // Update config
-                        if let Some(mut cfg) = crate::config::get_config() {
-                            for &idx in selected_indices.iter().rev() {
-                                if (idx as usize) < cfg.blocked_keys.len() {
-                                    cfg.blocked_keys.remove(idx as usize);
-                                }
+                        loop {
+                            index = SendMessageW(
+                                HWND(listview_hwnd as *mut _),
+                                0x100C, // LVM_GETNEXTITEM
+                                Some(WPARAM(index as usize)),
+                                Some(LPARAM(0x0002)), // LVNI_SELECTED
+                            )
+                            .0 as i32;
+
+                            if index == -1 {
+                                break;
                             }
-                            crate::config::update_config(&cfg);
-                            log::info!("Removed {} blocked keys", selected_indices.len());
+                            selected_indices.push(index);
+                        }
+
+                        if !selected_indices.is_empty() {
+                            // Remove from ListView (reverse order)
+                            for &idx in selected_indices.iter().rev() {
+                                let _ = SendMessageW(
+                                    HWND(listview_hwnd as *mut _),
+                                    0x1008, // LVM_DELETEITEM
+                                    Some(WPARAM(idx as usize)),
+                                    Some(LPARAM(0)),
+                                );
+                            }
+
+                            // Update config
+                            if let Some(mut cfg) = crate::config::get_config() {
+                                for &idx in selected_indices.iter().rev() {
+                                    if (idx as usize) < cfg.blocked_keys.len() {
+                                        cfg.blocked_keys.remove(idx as usize);
+                                    }
+                                }
+                                crate::config::update_config(&cfg);
+                                log::info!("Removed {} blocked keys", selected_indices.len());
+                            }
                         }
                     }
                 }
+                LRESULT::default()
             }
-            LRESULT::default()
-        }
-        WM_HSCROLL => {
-            let volume_slider = *VOLUME_SLIDER_HWND.lock().unwrap();
-            let pitch_slider = *PITCH_SLIDER_HWND.lock().unwrap();
-            
-            if volume_slider != 0 && lparam.0 as isize == volume_slider {
-                let pos = trackbar_scroll_position(
-                    volume_slider,
-                    wparam,
-                    VOLUME_SLIDER_MIN,
-                    VOLUME_SLIDER_MAX,
+            WM_HSCROLL => {
+                let volume_slider = *VOLUME_SLIDER_HWND.lock().unwrap();
+                let pitch_slider = *PITCH_SLIDER_HWND.lock().unwrap();
+
+                if volume_slider != 0 && lparam.0 as isize == volume_slider {
+                    let pos = trackbar_scroll_position(
+                        volume_slider,
+                        wparam,
+                        VOLUME_SLIDER_MIN,
+                        VOLUME_SLIDER_MAX,
+                    );
+
+                    let _ = SendMessageW(
+                        HWND(volume_slider as *mut _),
+                        TBM_SETPOS,
+                        Some(WPARAM(1)),
+                        Some(LPARAM(pos as isize)),
+                    );
+
+                    let volume = pos as f32 / 100.0;
+                    crate::audio::set_volume(volume);
+
+                    if let Some(mut cfg) = crate::config::get_config() {
+                        cfg.volume = volume;
+                        crate::config::update_config(&cfg);
+                    }
+
+                    let percentage = (volume * 100.0) as i32;
+                    let label_text = format!("\u{97F3}\u{91CF}: {}%", percentage);
+                    let label_hwnd = *VOLUME_LABEL_HWND.lock().unwrap();
+                    if label_hwnd != 0 {
+                        let label_text_utf16: Vec<u16> = label_text
+                            .encode_utf16()
+                            .chain(std::iter::once(0))
+                            .collect();
+                        let _ = SetWindowTextW(
+                            HWND(label_hwnd as *mut _),
+                            PCWSTR(label_text_utf16.as_ptr()),
+                        );
+                    }
+
+                    log::info!("Volume changed to {}%", percentage);
+                } else if pitch_slider != 0 && lparam.0 as isize == pitch_slider {
+                    let pos = trackbar_scroll_position(
+                        pitch_slider,
+                        wparam,
+                        PITCH_SLIDER_MIN,
+                        PITCH_SLIDER_MAX,
+                    );
+
+                    let _ = SendMessageW(
+                        HWND(pitch_slider as *mut _),
+                        TBM_SETPOS,
+                        Some(WPARAM(1)),
+                        Some(LPARAM(pos as isize)),
+                    );
+
+                    let pitch = pos as f32 / 100.0;
+                    crate::audio::set_pitch(pitch);
+
+                    if let Some(mut cfg) = crate::config::get_config() {
+                        cfg.pitch = pitch;
+                        crate::config::update_config(&cfg);
+                    }
+
+                    let label_text = format!("\u{97F3}\u{8C03}: {:.1}", pitch);
+                    let label_hwnd = *PITCH_LABEL_HWND.lock().unwrap();
+                    if label_hwnd != 0 {
+                        let label_text_utf16: Vec<u16> = label_text
+                            .encode_utf16()
+                            .chain(std::iter::once(0))
+                            .collect();
+                        let _ = SetWindowTextW(
+                            HWND(label_hwnd as *mut _),
+                            PCWSTR(label_text_utf16.as_ptr()),
+                        );
+                    }
+
+                    log::info!("Pitch changed to {:.1}", pitch);
+                }
+                LRESULT::default()
+            }
+            crate::consts::WM_KEY_CAPTURED => {
+                let vk_code = wparam.0 as u16;
+                *PENDING_KEY.lock().unwrap() = vk_code;
+                *CAPTURING_KEY.lock().unwrap() = false;
+
+                let key_name = vk_to_name(vk_code);
+                log::info!(
+                    "WM_KEY_CAPTURED: vk_code=0x{:02X} ({}), key_name={}",
+                    vk_code,
+                    vk_code,
+                    key_name
                 );
 
-                let _ = SendMessageW(
-                    HWND(volume_slider as *mut _),
-                    TBM_SETPOS,
-                    Some(WPARAM(1)),
-                    Some(LPARAM(pos as isize)),
-                );
+                // Update button text to show captured key
+                let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+                if btn_hwnd != 0 {
+                    let btn_text = format!("\u{786E}\u{8BA4}\u{6DFB}\u{52A0} {}", key_name);
+                    let text_utf16: Vec<u16> =
+                        btn_text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = SetWindowTextW(HWND(btn_hwnd as *mut _), PCWSTR(text_utf16.as_ptr()));
+                }
 
-                let volume = pos as f32 / 100.0;
-                crate::audio::set_volume(volume);
-
+                LRESULT::default()
+            }
+            WM_NOTIFY => {
+                if let Some(result) = handle_max_sources_spin_delta(lparam) {
+                    result
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_MOVE => {
+                // Save window position
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut rect);
                 if let Some(mut cfg) = crate::config::get_config() {
-                    cfg.volume = volume;
+                    cfg.settings_x = rect.left;
+                    cfg.settings_y = rect.top;
                     crate::config::update_config(&cfg);
                 }
-
-                let percentage = (volume * 100.0) as i32;
-                let label_text = format!("\u{97F3}\u{91CF}: {}%", percentage);
-                let label_hwnd = *VOLUME_LABEL_HWND.lock().unwrap();
-                if label_hwnd != 0 {
-                    let label_text_utf16: Vec<u16> = label_text.encode_utf16().chain(std::iter::once(0)).collect();
-                    let _ = SetWindowTextW(
-                        HWND(label_hwnd as *mut _),
-                        PCWSTR(label_text_utf16.as_ptr()),
-                    );
-                }
-
-                log::info!("Volume changed to {}%", percentage);
-            } else if pitch_slider != 0 && lparam.0 as isize == pitch_slider {
-                let pos = trackbar_scroll_position(
-                    pitch_slider,
-                    wparam,
-                    PITCH_SLIDER_MIN,
-                    PITCH_SLIDER_MAX,
-                );
-
-                let _ = SendMessageW(
-                    HWND(pitch_slider as *mut _),
-                    TBM_SETPOS,
-                    Some(WPARAM(1)),
-                    Some(LPARAM(pos as isize)),
-                );
-
-                let pitch = pos as f32 / 100.0;
-                crate::audio::set_pitch(pitch);
-
-                if let Some(mut cfg) = crate::config::get_config() {
-                    cfg.pitch = pitch;
-                    crate::config::update_config(&cfg);
-                }
-
-                let label_text = format!("\u{97F3}\u{8C03}: {:.1}", pitch);
-                let label_hwnd = *PITCH_LABEL_HWND.lock().unwrap();
-                if label_hwnd != 0 {
-                    let label_text_utf16: Vec<u16> = label_text.encode_utf16().chain(std::iter::once(0)).collect();
-                    let _ = SetWindowTextW(
-                        HWND(label_hwnd as *mut _),
-                        PCWSTR(label_text_utf16.as_ptr()),
-                    );
-                }
-
-                log::info!("Pitch changed to {:.1}", pitch);
+                LRESULT::default()
             }
-            LRESULT::default()
-        }
-        crate::consts::WM_KEY_CAPTURED => {
-            let vk_code = wparam.0 as u16;
-            *PENDING_KEY.lock().unwrap() = vk_code;
-            *CAPTURING_KEY.lock().unwrap() = false;
-
-            let key_name = vk_to_name(vk_code);
-            log::info!("WM_KEY_CAPTURED: vk_code=0x{:02X} ({}), key_name={}", vk_code, vk_code, key_name);
-
-            // Update button text to show captured key
-            let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
-            if btn_hwnd != 0 {
-                let btn_text = format!("\u{786E}\u{8BA4}\u{6DFB}\u{52A0} {}", key_name);
-                let text_utf16: Vec<u16> = btn_text.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = SetWindowTextW(
-                    HWND(btn_hwnd as *mut _),
-                    PCWSTR(text_utf16.as_ptr()),
-                );
+            WM_CLOSE => {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                LRESULT::default()
             }
-
-            LRESULT::default()
-        }
-        WM_NOTIFY => {
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
-        WM_MOVE => {
-            // Save window position
-            let mut rect = RECT::default();
-            let _ = GetWindowRect(hwnd, &mut rect);
-            if let Some(mut cfg) = crate::config::get_config() {
-                cfg.settings_x = rect.left;
-                cfg.settings_y = rect.top;
-                crate::config::update_config(&cfg);
+            WM_DESTROY => {
+                *SETTINGS_HWND.lock().unwrap() = 0;
+                *COMBOBOX_HWND.lock().unwrap() = 0;
+                *VOLUME_SLIDER_HWND.lock().unwrap() = 0;
+                *VOLUME_LABEL_HWND.lock().unwrap() = 0;
+                *PITCH_SLIDER_HWND.lock().unwrap() = 0;
+                *PITCH_LABEL_HWND.lock().unwrap() = 0;
+                *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
+                *MAX_SOURCES_EDITING.lock().unwrap() = false;
+                *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = 0;
+                destroy_ui_fonts();
+                LRESULT::default()
             }
-            LRESULT::default()
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-        WM_CLOSE => {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-            LRESULT::default()
-        }
-        WM_DESTROY => {
-            *SETTINGS_HWND.lock().unwrap() = 0;
-            *COMBOBOX_HWND.lock().unwrap() = 0;
-            *VOLUME_SLIDER_HWND.lock().unwrap() = 0;
-            *VOLUME_LABEL_HWND.lock().unwrap() = 0;
-            *PITCH_SLIDER_HWND.lock().unwrap() = 0;
-            *PITCH_LABEL_HWND.lock().unwrap() = 0;
-            *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
-            *MAX_SOURCES_EDITING.lock().unwrap() = false;
-            *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = 0;
-            LRESULT::default()
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-    }
     }) {
         Ok(result) => result,
         Err(e) => {
@@ -958,4 +1291,26 @@ extern "system" {
 #[link(name = "comdlg32")]
 extern "system" {
     fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn updown_message_constants_match_windows_sdk_values() {
+        assert_eq!(UDM_SETBUDDY, 0x0469);
+        assert_eq!(UDM_SETRANGE32, 0x046F);
+        assert_eq!(UDM_SETPOS32, 0x0471);
+        assert_eq!(UDN_DELTAPOS, 0xFFFF_FD2E);
+    }
+
+    #[test]
+    fn max_sources_clamps_to_supported_ui_range() {
+        assert_eq!(clamp_max_sources(1), 2);
+        assert_eq!(clamp_max_sources(2), 2);
+        assert_eq!(clamp_max_sources(12), 12);
+        assert_eq!(clamp_max_sources(20), 20);
+        assert_eq!(clamp_max_sources(21), 20);
+    }
 }
