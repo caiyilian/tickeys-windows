@@ -820,8 +820,54 @@ unsafe extern "system" fn settings_wnd_proc(
                     *MAX_SOURCES_EDITING.lock().unwrap() = false;
                 }
             } else if id == 19 && code == 0 { // Add blocked key button
+                let pending = *PENDING_KEY.lock().unwrap();
                 let capturing = *CAPTURING_KEY.lock().unwrap();
-                if !capturing {
+
+                if pending != 0 && !capturing {
+                    // Confirm and add the captured key
+                    if let Some(mut cfg) = crate::config::get_config() {
+                        if !cfg.blocked_keys.contains(&pending) {
+                            cfg.blocked_keys.push(pending);
+                            cfg.blocked_keys.sort();
+                            cfg.blocked_keys.dedup();
+                            crate::config::update_config(&cfg);
+
+                            // Update ListView
+                            let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
+                            if listview_hwnd != 0 {
+                                let key_name = vk_to_name(pending);
+                                let key_utf16: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
+                                let mut item = LVCITEMW {
+                                    mask: 0x0001,
+                                    iItem: cfg.blocked_keys.len() as i32 - 1,
+                                    pszText: key_utf16.as_ptr() as *mut _,
+                                    ..std::mem::zeroed()
+                                };
+                                let _ = SendMessageW(
+                                    HWND(listview_hwnd as *mut _),
+                                    0x104D, // LVM_INSERTITEMW
+                                    Some(WPARAM(0)),
+                                    Some(LPARAM(&mut item as *mut _ as isize)),
+                                );
+                            }
+
+                            log::info!("Added blocked key: {} (0x{:02X})", vk_to_name(pending), pending);
+                        }
+                    }
+                    *PENDING_KEY.lock().unwrap() = 0;
+
+                    // Reset button text
+                    *CAPTURING_KEY.lock().unwrap() = false;
+                    let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
+                    if btn_hwnd != 0 {
+                        let text = "\u{6DFB}\u{52A0}\u{6309}\u{952E}";
+                        let text_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = SetWindowTextW(
+                            HWND(btn_hwnd as *mut _),
+                            PCWSTR(text_utf16.as_ptr()),
+                        );
+                    }
+                } else if !capturing {
                     // Start capturing
                     *CAPTURING_KEY.lock().unwrap() = true;
                     let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
@@ -834,52 +880,6 @@ unsafe extern "system" fn settings_wnd_proc(
                         );
                     }
                     log::info!("Key capture started");
-                } else {
-                    // Confirm and add the captured key
-                    let pending = *PENDING_KEY.lock().unwrap();
-                    if pending != 0 {
-                        if let Some(mut cfg) = crate::config::get_config() {
-                            if !cfg.blocked_keys.contains(&pending) {
-                                cfg.blocked_keys.push(pending);
-                                cfg.blocked_keys.sort();
-                                cfg.blocked_keys.dedup();
-                                crate::config::update_config(&cfg);
-
-                                // Update ListView
-                                let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
-                                if listview_hwnd != 0 {
-                                    let key_name = vk_to_name(pending);
-                                    let key_utf16: Vec<u16> = key_name.encode_utf16().chain(std::iter::once(0)).collect();
-                                    let mut item = LVCITEMW {
-                                        mask: 0x0001,
-                                        iItem: cfg.blocked_keys.len() as i32 - 1,
-                                        pszText: key_utf16.as_ptr() as *mut _,
-                                        ..std::mem::zeroed()
-                                    };
-                                    let _ = SendMessageW(
-                                        HWND(listview_hwnd as *mut _),
-                                        0x1007, // LVM_INSERTITEMW
-                                        Some(WPARAM(0)),
-                                        Some(LPARAM(&mut item as *mut _ as isize)),
-                                    );
-                                }
-
-                                log::info!("Added blocked key: {} (0x{:02X})", vk_to_name(pending), pending);
-                            }
-                        }
-                        *PENDING_KEY.lock().unwrap() = 0;
-                    }
-                    // Reset button text
-                    *CAPTURING_KEY.lock().unwrap() = false;
-                    let btn_hwnd = *ADD_BUTTON_HWND.lock().unwrap();
-                    if btn_hwnd != 0 {
-                        let text = "\u{6DFB}\u{52A0}\u{6309}\u{952E}";
-                        let text_utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-                        let _ = SetWindowTextW(
-                            HWND(btn_hwnd as *mut _),
-                            PCWSTR(text_utf16.as_ptr()),
-                        );
-                    }
                 }
             } else if id == 20 && code == 0 { // Remove blocked key button
                 let listview_hwnd = *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap();
