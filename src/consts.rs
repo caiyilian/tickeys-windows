@@ -22,6 +22,7 @@ pub const WM_TRAYICON: u32 = 0x0401;   // WM_USER + 1
 pub const WM_KEYDOWN_HOOK: u32 = 0x0402;  // WM_USER + 2
 pub const WM_FOREGROUND_CHANGE: u32 = 0x0403;  // WM_USER + 3
 pub const WM_SHOW_SETTINGS: u32 = 0x0410;  // WM_USER + 10 (for shortcut key)
+pub const WM_KEY_CAPTURED: u32 = 0x0500;  // custom message for key capture
 
 // --- Power event constants ---
 pub const WM_POWERBROADCAST: u32 = 0x0218;
