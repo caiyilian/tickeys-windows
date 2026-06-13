@@ -18,9 +18,11 @@ fn main() {
     if icon_path.exists() {
         let mut res = winres::WindowsResource::new();
         res.set_icon("resource/icon.ico");
+        res.set_manifest_file("resource/app.manifest");
         res.set("FileDescription", "Tickeys for Windows");
         res.set("ProductName", "Tickeys");
         res.set("ProductVersion", env!("CARGO_PKG_VERSION"));
+        res.set("FileVersion", env!("CARGO_PKG_VERSION"));
         res.compile().unwrap();
     }
 }
