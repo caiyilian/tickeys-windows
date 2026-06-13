@@ -102,6 +102,13 @@ fn load_default_scheme() {
     };
 
     switch_scheme(&scheme_name);
+
+    // Rebuild player with max_sources from config
+    let max_sources = cfg.max_sources;
+    if audio::player_is_initialized() {
+        audio::rebuild_player(max_sources);
+        log::info!("Player initialized with max_sources={}", max_sources);
+    }
 }
 
 fn map_key_to_audio(vk_code: u16) -> Option<usize> {
