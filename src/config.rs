@@ -83,7 +83,7 @@ impl Config {
     fn validate(&mut self) {
         self.volume = self.volume.clamp(0.0, 5.0);
         self.pitch = self.pitch.clamp(0.5, 2.0);
-        self.max_sources = self.max_sources.clamp(1, 8);
+        self.max_sources = self.max_sources.clamp(1, 20);
 
         self.filter_list.sort();
         self.filter_list.dedup();
