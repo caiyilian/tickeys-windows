@@ -594,27 +594,35 @@ pub enum FilterMode {
 
 ---
 
-## 阶段十二：发布准备与打包（简化版）
+## 阶段十二：发布准备与打包（简化版） ✅ 已完成
 
 > **目标**：打包为可分发版本
 
-### 任务 12.1 — 清单文件
+### 任务 12.1 — 清单文件 ✅
 
 - 创建 `app.manifest`：
   - DPI 感知：`<dpiAwareness>PerMonitorV2</dpiAwareness>`
   - UAC 兼容：`<requestedExecutionLevel level="asInvoker" />`
   - Windows 版本兼容：`<supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>`
 
-### 任务 12.2 — 单文件发布
+### 任务 12.2 — 单文件发布 ✅
 
 - 将 exe、`openal32.dll`、`data/` 目录、`icon.ico` 打包为 zip
 - 或使用 `cargo install --path .` 安装到用户目录
 
-### 里程碑 12
+### 里程碑 12 ✅
 
 ```
 发布第一个可用版本 (.exe 可分发)
 ```
+
+### 完成情况
+
+- [x] 创建 `resource/app.manifest`，包含 PerMonitorV2 DPI 感知、UAC 兼容、Windows 7-11 版本兼容
+- [x] 集成 manifest 到 `build.rs`，通过 winres 嵌入到 exe
+- [x] 创建 `scripts/package-release.ps1` 打包脚本
+- [x] Release 构建：exe 1.69 MB，zip 包 5.53 MB
+- [x] 打包内容：`tickeys-windows.exe` + `OpenAL32.dll` + `icon.ico` + `data/` 目录
 
 ---
 
