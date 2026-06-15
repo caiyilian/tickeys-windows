@@ -3,7 +3,7 @@ use std::ffi::CString;
 use std::path::PathBuf;
 use std::path::Path;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 static mut DEVICE: *mut std::ffi::c_void = ptr::null_mut();
@@ -154,6 +154,7 @@ pub struct SimpleAudioPlayer {
     data: Vec<AudioData>,
     source_cache: VecDeque<AudioSource>,
     _max_source_count: usize,
+    peak_sources: usize,
 }
 
 impl SimpleAudioPlayer {
@@ -167,6 +168,7 @@ impl SimpleAudioPlayer {
             data: Vec::new(),
             source_cache: sources,
             _max_source_count: max_source_count,
+            peak_sources: 0,
         }
     }
 
@@ -210,6 +212,9 @@ impl SimpleAudioPlayer {
                 }
             }
         }
+        if playing_count > self.peak_sources {
+            self.peak_sources = playing_count;
+        }
         log::info!("play: index={}, {}/{}", index, playing_count, self._max_source_count);
     }
 
@@ -246,6 +251,11 @@ impl Drop for SimpleAudioPlayer {
 
 static PLAYER: Mutex<Option<SimpleAudioPlayer>> = Mutex::new(None);
 static MUTED: AtomicBool = AtomicBool::new(false);
+static PEAK_SOURCES: AtomicU32 = AtomicU32::new(0);
+
+pub fn get_peak_sources() -> u32 {
+    PEAK_SOURCES.load(Ordering::Relaxed)
+}
 
 pub fn set_mute(muted: bool) {
     MUTED.store(muted, Ordering::Relaxed);
@@ -264,6 +274,7 @@ pub fn is_muted() -> bool {
 pub fn init_player(max_sources: usize) {
     let mut guard = PLAYER.lock().unwrap();
     *guard = Some(SimpleAudioPlayer::new(max_sources));
+    PEAK_SOURCES.store(0, Ordering::Relaxed);
 }
 
 pub fn load_audio_data(data: Vec<AudioData>) {
@@ -292,6 +303,7 @@ pub fn play_audio(index: usize) {
     let mut guard = PLAYER.lock().unwrap();
     if let Some(ref mut player) = *guard {
         player.play(index);
+        PEAK_SOURCES.store(player.peak_sources as u32, Ordering::Relaxed);
     }
 }
 
