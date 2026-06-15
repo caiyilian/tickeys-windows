@@ -1,6 +1,7 @@
 #![allow(non_snake_case, static_mut_refs)]
 use crate::consts::{WM_KEYDOWN_HOOK, WM_SHOW_SETTINGS, OPEN_SETTINGS_KEY_SEQ};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -12,6 +13,8 @@ static mut LAST_KEY: i16 = -1;
 static mut LAST_TIME: u64 = 0;
 
 static mut KEY_HISTORY: Option<VecDeque<u32>> = None;
+
+static DEBOUNCE_MS: AtomicU32 = AtomicU32::new(20);
 
 #[repr(C)]
 struct KBDLLHOOKSTRUCT {
@@ -49,6 +52,10 @@ pub fn install(main_hwnd: HWND) -> Result<(), String> {
             Err(e) => Err(format!("Failed to install keyboard hook: {e:?}")),
         }
     }
+}
+
+pub fn set_debounce_ms(ms: u32) {
+    DEBOUNCE_MS.store(ms.clamp(10, 500), Ordering::Relaxed);
 }
 
 pub fn uninstall() {
@@ -104,7 +111,7 @@ fn is_too_frequent(keycode: u16) -> bool {
     unsafe {
         let now = now_ms();
         let delta = now.wrapping_sub(LAST_TIME);
-        if delta < 120 && LAST_KEY == keycode as i16 {
+        if delta < DEBOUNCE_MS.load(Ordering::Relaxed) as u64 && LAST_KEY == keycode as i16 {
             LAST_TIME = now;
             return true;
         }

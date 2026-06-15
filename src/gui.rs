@@ -18,6 +18,8 @@ const PITCH_SLIDER_MIN: i32 = 50;
 const PITCH_SLIDER_MAX: i32 = 200;
 const MAX_SOURCES_MIN: i32 = 2;
 const MAX_SOURCES_MAX: i32 = 20;
+const DEBOUNCE_MIN: i32 = 10;
+const DEBOUNCE_MAX: i32 = 500;
 const UDM_SETRANGE32: u32 = 0x046F;
 const UDM_SETPOS32: u32 = 0x0471;
 const UDM_SETBUDDY: u32 = 0x0469;
@@ -119,6 +121,8 @@ pub static CAPTURING_KEY: Mutex<bool> = Mutex::new(false);
 pub static PENDING_KEY: Mutex<u16> = Mutex::new(0);
 static ADD_BUTTON_HWND: Mutex<isize> = Mutex::new(0);
 static PEAK_LABEL_HWND: Mutex<isize> = Mutex::new(0);
+static DEBOUNCE_EDIT_HWND: Mutex<isize> = Mutex::new(0);
+static DEBOUNCE_EDITING: Mutex<bool> = Mutex::new(false);
 static UI_FONT: Mutex<isize> = Mutex::new(0);
 static UI_TITLE_FONT: Mutex<isize> = Mutex::new(0);
 
@@ -241,6 +245,99 @@ unsafe fn commit_max_sources(edit_hwnd: isize, value: usize) {
         }
         log::info!("Max sources changed to {}", value);
     }
+}
+
+fn clamp_debounce_ms(value: i32) -> u32 {
+    value.clamp(DEBOUNCE_MIN, DEBOUNCE_MAX) as u32
+}
+
+fn config_debounce_ms() -> u32 {
+    crate::config::get_config()
+        .map(|c| clamp_debounce_ms(c.key_debounce_ms as i32))
+        .unwrap_or(DEBOUNCE_MIN as u32)
+}
+
+unsafe fn set_debounce_text(edit_hwnd: isize, value: u32) {
+    let text = wide(&value.to_string());
+    let _ = SetWindowTextW(HWND(edit_hwnd as *mut _), PCWSTR(text.as_ptr()));
+}
+
+unsafe fn read_debounce_text(edit_hwnd: isize) -> Option<u32> {
+    let mut text = [0u16; 16];
+    let len = GetWindowTextW(HWND(edit_hwnd as *mut _), &mut text);
+    if len <= 0 {
+        return None;
+    }
+    let text_str = String::from_utf16_lossy(&text[..len as usize]);
+    text_str.trim().parse::<i32>().ok().map(clamp_debounce_ms)
+}
+
+unsafe fn begin_debounce_edit() -> bool {
+    let mut editing = DEBOUNCE_EDITING.lock().unwrap();
+    if *editing {
+        return false;
+    }
+    *editing = true;
+    true
+}
+
+fn end_debounce_edit() {
+    *DEBOUNCE_EDITING.lock().unwrap() = false;
+}
+
+unsafe fn commit_debounce_ms(edit_hwnd: isize, value: u32) {
+    let previous = config_debounce_ms();
+    set_debounce_text(edit_hwnd, value);
+    if value != previous {
+        crate::keyboard::set_debounce_ms(value);
+        if let Some(mut cfg) = crate::config::get_config() {
+            cfg.key_debounce_ms = value;
+            crate::config::update_config(&cfg);
+        }
+        log::info!("Key debounce changed to {}ms", value);
+    }
+}
+
+unsafe fn handle_debounce_edit_change() -> LRESULT {
+    let edit_hwnd = *DEBOUNCE_EDIT_HWND.lock().unwrap();
+    if edit_hwnd == 0 || !begin_debounce_edit() {
+        return LRESULT::default();
+    }
+
+    if let Some(value) = read_debounce_text(edit_hwnd) {
+        commit_debounce_ms(edit_hwnd, value);
+    }
+
+    end_debounce_edit();
+    LRESULT::default()
+}
+
+unsafe fn handle_debounce_spin_delta(lparam: LPARAM) -> Option<LRESULT> {
+    if lparam.0 == 0 {
+        return None;
+    }
+    let updown = &*(lparam.0 as *const NMUPDOWN_LOCAL);
+    if updown.hdr.code != UDN_DELTAPOS || updown.hdr.idFrom != 11 {
+        return None;
+    }
+
+    let edit_hwnd = *DEBOUNCE_EDIT_HWND.lock().unwrap();
+    if edit_hwnd == 0 || !begin_debounce_edit() {
+        return Some(LRESULT(1));
+    }
+
+    let current = read_debounce_text(edit_hwnd).unwrap_or_else(config_debounce_ms);
+    let next = clamp_debounce_ms(current as i32 + updown.iDelta);
+    commit_debounce_ms(edit_hwnd, next);
+    let _ = SendMessageW(
+        updown.hdr.hwndFrom,
+        UDM_SETPOS32,
+        Some(WPARAM(0)),
+        Some(LPARAM(next as isize)),
+    );
+
+    end_debounce_edit();
+    Some(LRESULT(1))
 }
 
 unsafe fn handle_max_sources_edit_change() -> LRESULT {
@@ -723,14 +820,14 @@ fn create_controls(hwnd: isize) {
         y += row_h + 40;  // 音调行高度 + 间距
 
         // --- "播放性能" 分组框 ---
-        // y=208, 分组框边框在 y-16=192, 高度=80
+        // 分组框边框在 y-30, 高度=145（容纳三行）
         let playback_group_text = wide("\u{64AD}\u{653E}\u{6027}\u{80FD}");
         let playback_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             PCWSTR(playback_group_text.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
-            group_x, y - 30, group_w, 105,  // 居中, y偏移, 宽, 高（加高容纳两行）
+            group_x, y - 30, group_w, 145,
             Some(parent),
             Some(HMENU(104 as *mut _)),
             Some(instance.into()),
@@ -847,7 +944,99 @@ fn create_controls(hwnd: isize) {
         apply_font_to(&peak_label, ui_font);
         *PEAK_LABEL_HWND.lock().unwrap() = peak_label.as_ref().map_or(0, |h| h.0 as isize);
 
-        y += row_h * 2 + 50;  // 两行高度 + 间距
+        // --- 按键防抖(ms) 标签 + 输入框 + 箭头 ---
+        // 第三行：y + 2*(row_h + 6) + 2
+        let debounce_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("\u{6309}\u{952E}\u{9632}\u{6296}(ms)"),
+            WS_CHILD | WS_VISIBLE,
+            margin, y + 2 * (row_h + 6) + 2, label_w, row_h,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(11 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&debounce_label, ui_font);
+
+        let current_debounce = config_debounce_ms();
+
+        let debounce_edit_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("EDIT"),
+            None,
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL | ES_NUMBER),
+            ctrl_x, y + 2 * (row_h + 6) + 4, 60, row_h - 4,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(12 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&debounce_edit_hwnd, ui_font);
+
+        if let Ok(debounce_edit_hwnd) = debounce_edit_hwnd {
+            *DEBOUNCE_EDIT_HWND.lock().unwrap() = debounce_edit_hwnd.0 as isize;
+
+            *DEBOUNCE_EDITING.lock().unwrap() = true;
+            set_debounce_text(debounce_edit_hwnd.0 as isize, current_debounce);
+
+            let spin_hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("msctls_updown32"),
+                None,
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(UDS_ARROWKEYS | UDS_NOTHOUSANDS),
+                ctrl_x + 60, y + 2 * (row_h + 6) + 4, 20, row_h - 4,
+                Some(HWND(hwnd as *mut _)),
+                Some(HMENU(13 as *mut _)),
+                Some(instance.into()),
+                None,
+            );
+            apply_font_to(&spin_hwnd, ui_font);
+
+            if let Ok(spin_hwnd) = spin_hwnd {
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETBUDDY,
+                    Some(WPARAM(debounce_edit_hwnd.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETRANGE32,
+                    Some(WPARAM(DEBOUNCE_MIN as usize)),
+                    Some(LPARAM(DEBOUNCE_MAX as isize)),
+                );
+                let _ = SendMessageW(
+                    spin_hwnd,
+                    UDM_SETPOS32,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(current_debounce as isize)),
+                );
+            }
+
+            *DEBOUNCE_EDITING.lock().unwrap() = false;
+
+            log::info!(
+                "Debounce spin control created with range {}-{}, value={}",
+                DEBOUNCE_MIN, DEBOUNCE_MAX, current_debounce
+            );
+        }
+
+        // --- 按键防抖 提示文本 ---
+        let debounce_hint = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("\u{8303}\u{56F4}10-500"),
+            WS_CHILD | WS_VISIBLE,
+            ctrl_x + 92, y + 2 * (row_h + 6) + 4, 200, row_h - 4,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(108 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&debounce_hint, ui_font);
+
+        y += row_h * 3 + 60;  // 三行高度 + 间距
 
         // --- "排除按键" 分组框 ---
         // y=252, 分组框边框在 y-52=200, 高度=276
@@ -1033,6 +1222,9 @@ unsafe extern "system" fn settings_wnd_proc(
                 } else if id == 7 && code == EN_CHANGE as usize {
                     // EN_CHANGE for max sources Edit
                     return handle_max_sources_edit_change();
+                } else if id == 12 && code == EN_CHANGE as usize {
+                    // EN_CHANGE for debounce Edit
+                    return handle_debounce_edit_change();
                 } else if id == 19 && code == 0 {
                     // Add blocked key button
                     let pending = *PENDING_KEY.lock().unwrap();
@@ -1260,6 +1452,8 @@ unsafe extern "system" fn settings_wnd_proc(
             WM_NOTIFY => {
                 if let Some(result) = handle_max_sources_spin_delta(lparam) {
                     result
+                } else if let Some(result) = handle_debounce_spin_delta(lparam) {
+                    result
                 } else {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1307,6 +1501,8 @@ unsafe extern "system" fn settings_wnd_proc(
                 *MAX_SOURCES_EDITING.lock().unwrap() = false;
                 *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = 0;
                 *PEAK_LABEL_HWND.lock().unwrap() = 0;
+                *DEBOUNCE_EDIT_HWND.lock().unwrap() = 0;
+                *DEBOUNCE_EDITING.lock().unwrap() = false;
                 destroy_ui_fonts();
                 LRESULT::default()
             }
