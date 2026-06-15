@@ -118,6 +118,7 @@ static BLOCKED_KEYS_LISTVIEW_HWND: Mutex<isize> = Mutex::new(0);
 pub static CAPTURING_KEY: Mutex<bool> = Mutex::new(false);
 pub static PENDING_KEY: Mutex<u16> = Mutex::new(0);
 static ADD_BUTTON_HWND: Mutex<isize> = Mutex::new(0);
+static PEAK_LABEL_HWND: Mutex<isize> = Mutex::new(0);
 static UI_FONT: Mutex<isize> = Mutex::new(0);
 static UI_TITLE_FONT: Mutex<isize> = Mutex::new(0);
 
@@ -729,7 +730,7 @@ fn create_controls(hwnd: isize) {
             w!("BUTTON"),
             PCWSTR(playback_group_text.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
-            group_x, y - 30, group_w, 70,  // 居中, y偏移, 宽, 高
+            group_x, y - 30, group_w, 105,  // 居中, y偏移, 宽, 高（加高容纳两行）
             Some(parent),
             Some(HMENU(104 as *mut _)),
             Some(instance.into()),
@@ -820,7 +821,7 @@ fn create_controls(hwnd: isize) {
         let max_sources_hint = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!("\u{4E0A}\u{7BAD}\u{5934}\u{589E}\u{52A0}\u{FF0C}\u{4E0B}\u{7BAD}\u{5934}\u{51CF}\u{5C11}\u{FF0C}\u{8303}\u{56F4} 2-20"),
+            w!("\u{6700}\u{5927}20\u{FF0C}\u{6700}\u{5C0F}2"),
             WS_CHILD | WS_VISIBLE,
             ctrl_x + 92, y + 2, 200, row_h - 4,  // x=232, y=210, 宽=220, 高=24
             Some(HWND(hwnd as *mut _)),
@@ -830,7 +831,23 @@ fn create_controls(hwnd: isize) {
         );
         apply_font_to(&max_sources_hint, ui_font);
 
-        y += row_h + 40;  // 同时播放数行高度 + 间距
+        // --- 峰值同时播放数 ---
+        // 第二行：y + row_h + 6
+        let peak_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("\u{5CF0}\u{503C}\u{540C}\u{65F6}\u{64AD}\u{653E}\u{6570}: 0"),
+            WS_CHILD | WS_VISIBLE,
+            margin, y + row_h + 6, 250, row_h,
+            Some(HWND(hwnd as *mut _)),
+            Some(HMENU(107 as *mut _)),
+            Some(instance.into()),
+            None,
+        );
+        apply_font_to(&peak_label, ui_font);
+        *PEAK_LABEL_HWND.lock().unwrap() = peak_label.as_ref().map_or(0, |h| h.0 as isize);
+
+        y += row_h * 2 + 50;  // 两行高度 + 间距
 
         // --- "排除按键" 分组框 ---
         // y=252, 分组框边框在 y-52=200, 高度=276
@@ -975,6 +992,9 @@ fn create_controls(hwnd: isize) {
             y,
             SWP_NOMOVE | SWP_NOZORDER,
         );
+
+        // Start timer to refresh peak sources label every second
+        let _ = SetTimer(Some(HWND(hwnd as *mut _)), 200usize, 1000u32, None);
     }
 }
 
@@ -1244,6 +1264,22 @@ unsafe extern "system" fn settings_wnd_proc(
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
             }
+            WM_TIMER => {
+                if wparam.0 == 200 {
+                    let peak = crate::audio::get_peak_sources();
+                    let text = format!("\u{5CF0}\u{503C}\u{540C}\u{65F6}\u{64AD}\u{653E}\u{6570}: {}", peak);
+                    let text_utf16: Vec<u16> =
+                        text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let label_hwnd = *PEAK_LABEL_HWND.lock().unwrap();
+                    if label_hwnd != 0 {
+                        let _ = SetWindowTextW(
+                            HWND(label_hwnd as *mut _),
+                            PCWSTR(text_utf16.as_ptr()),
+                        );
+                    }
+                }
+                LRESULT::default()
+            }
             WM_MOVE => {
                 // Save window position
                 let mut rect = RECT::default();
@@ -1260,6 +1296,7 @@ unsafe extern "system" fn settings_wnd_proc(
                 LRESULT::default()
             }
             WM_DESTROY => {
+                let _ = KillTimer(Some(hwnd), 200usize);
                 *SETTINGS_HWND.lock().unwrap() = 0;
                 *COMBOBOX_HWND.lock().unwrap() = 0;
                 *VOLUME_SLIDER_HWND.lock().unwrap() = 0;
@@ -1269,6 +1306,7 @@ unsafe extern "system" fn settings_wnd_proc(
                 *MAX_SOURCES_COMBO_HWND.lock().unwrap() = 0;
                 *MAX_SOURCES_EDITING.lock().unwrap() = false;
                 *BLOCKED_KEYS_LISTVIEW_HWND.lock().unwrap() = 0;
+                *PEAK_LABEL_HWND.lock().unwrap() = 0;
                 destroy_ui_fonts();
                 LRESULT::default()
             }
