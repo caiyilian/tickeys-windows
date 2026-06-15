@@ -1,6 +1,6 @@
 [package]
 name = "tickeys-windows"
-version = "0.5.1"
+version = "1.0.1"
 edition = "2021"
 authors = ["ciyilian"]
 build = "build.rs"
