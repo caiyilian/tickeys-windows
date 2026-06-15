@@ -12,6 +12,8 @@ static mut MAIN_HWND: Option<HWND> = None;
 static mut LAST_KEY: i16 = -1;
 static mut LAST_TIME: u64 = 0;
 
+static mut PRESSED_KEYS: [bool; 256] = [false; 256];
+
 static mut KEY_HISTORY: Option<VecDeque<u32>> = None;
 
 static DEBOUNCE_MS: AtomicU32 = AtomicU32::new(20);
@@ -73,17 +75,32 @@ unsafe extern "system" fn low_level_keyboard_proc(
     l_param: LPARAM,
 ) -> LRESULT {
     if n_code == HC_ACTION as i32 {
-        if w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN {
-            let kb = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
-            let vk_code = kb.vkCode as u16;
+        let msg = w_param.0 as u32;
+        let kb = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let vk_code = kb.vkCode;
 
-            if !is_too_frequent(vk_code) {
+        if msg == WM_KEYUP || msg == WM_SYSKEYUP {
+            if vk_code < 256 {
+                PRESSED_KEYS[vk_code as usize] = false;
+            }
+        } else if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+            // Skip repeat keys (already held down)
+            if vk_code < 256 {
+                if PRESSED_KEYS[vk_code as usize] {
+                    return CallNextHookEx(None, n_code, w_param, l_param);
+                }
+                PRESSED_KEYS[vk_code as usize] = true;
+            }
+
+            let vk_code_u16 = vk_code as u16;
+
+            if !is_too_frequent(vk_code_u16) {
                 // Add to key history
                 if KEY_HISTORY.is_none() {
                     KEY_HISTORY = Some(VecDeque::with_capacity(20));
                 }
                 if let Some(ref mut history) = KEY_HISTORY {
-                    history.push_back(vk_code as u32);
+                    history.push_back(vk_code);
                     if history.len() > 20 {
                         history.pop_front();
                     }
