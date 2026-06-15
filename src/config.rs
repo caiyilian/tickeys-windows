@@ -103,7 +103,27 @@ impl Default for Config {
             filter_list: Vec::new(),
             filter_mode: FilterMode::BlackList,
             auto_start: false,
-            blocked_keys: Vec::new(),
+            blocked_keys: vec![
+                8,   // VK_BACK
+                13,  // VK_RETURN
+                32,  // VK_SPACE
+                37,  // VK_LEFT
+                38,  // VK_UP
+                39,  // VK_RIGHT
+                40,  // VK_DOWN
+                112, // VK_F1
+                113, // VK_F2
+                114, // VK_F3
+                115, // VK_F4
+                116, // VK_F5
+                117, // VK_F6
+                118, // VK_F7
+                119, // VK_F8
+                120, // VK_F9
+                121, // VK_F10
+                122, // VK_F11
+                123, // VK_F12
+            ],
             settings_x: -1,
             settings_y: -1,
         }
