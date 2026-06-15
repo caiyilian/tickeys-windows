@@ -8,6 +8,8 @@ pub struct Config {
     pub volume: f32,
     pub pitch: f32,
     pub max_sources: usize,
+    #[serde(default = "default_debounce_ms")]
+    pub key_debounce_ms: u32,
     pub filter_list: Vec<String>,
     pub filter_mode: FilterMode,
     pub auto_start: bool,
@@ -20,6 +22,10 @@ pub struct Config {
 pub enum FilterMode {
     BlackList,
     WhiteList,
+}
+
+fn default_debounce_ms() -> u32 {
+    20
 }
 
 fn config_dir() -> PathBuf {
@@ -84,6 +90,7 @@ impl Config {
         self.volume = self.volume.clamp(0.0, 5.0);
         self.pitch = self.pitch.clamp(0.5, 2.0);
         self.max_sources = self.max_sources.clamp(1, 20);
+        self.key_debounce_ms = self.key_debounce_ms.clamp(10, 500);
 
         self.filter_list.sort();
         self.filter_list.dedup();
@@ -100,6 +107,7 @@ impl Default for Config {
             volume: 0.5,
             pitch: 1.0,
             max_sources: 2,
+            key_debounce_ms: 20,
             filter_list: Vec::new(),
             filter_mode: FilterMode::BlackList,
             auto_start: false,
