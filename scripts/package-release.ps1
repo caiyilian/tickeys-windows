@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$version = "1.0.1"
+$version = "1.0.2"
 $releaseDir = "target\release"
 $packageName = "tickeys-windows-v$version"
 $packageDir = "target\$packageName"
